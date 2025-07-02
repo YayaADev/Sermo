@@ -1,0 +1,16 @@
+# Kotlin/Gradle
+*.class
+*.jar
+/build/
+.gradle/
+backend/secrets/
+
+# Node/React Native
+node_modules/
+.expo/
+dist/
+.env
+
+# OS junk
+.DS_Store
+Thumbs.db
