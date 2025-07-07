@@ -16,18 +16,25 @@ repositories {
 }
 
 dependencies {
-    // Ktor server dependencies - minimal set
     implementation("io.ktor:ktor-server-core-jvm")
     implementation("io.ktor:ktor-server-netty-jvm")
     
-    // Logging
-    implementation("ch.qos.logback:logback-classic:1.4.14")
+    implementation("ch.qos.logback:logback-classic:1.5.13")
     
-    // Testing dependencies
     testImplementation("io.ktor:ktor-server-tests-jvm")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:1.9.21")
 }
 
 kotlin {
     jvmToolchain(21)
+}
+
+tasks.jar {
+    manifest {
+        attributes["Main-Class"] = "com.sermo.SermoKt"
+    }
+    from(configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) }) {
+        exclude("META-INF/*.RSA", "META-INF/*.SF", "META-INF/*.DSA")
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }

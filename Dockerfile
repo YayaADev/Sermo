@@ -33,8 +33,8 @@ RUN groupadd -r sermo && useradd -r -g sermo sermo
 # Set working directory
 WORKDIR /app
 
-# Copy built JAR from builder stage
-COPY --from=builder /app/build/libs/*.jar app.jar
+# Copy built JAR from builder stage - FIX: Use correct filename
+COPY --from=builder /app/build/libs/sermo-1.0.0.jar app.jar
 
 # Create directories for credentials and logs
 RUN mkdir -p /app/credentials /app/logs
