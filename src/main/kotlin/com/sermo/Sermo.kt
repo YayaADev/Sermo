@@ -15,7 +15,7 @@ fun main() {
     val port = System.getenv("SERVER_PORT")?.toIntOrNull() ?: 8080
     val host = System.getenv("SERVER_HOST") ?: "0.0.0.0"
 
-    println("🚀 Starting Sermo API server on $host:$port")
+    println("Starting Sermo API server on $host:$port")
 
     embeddedServer(Netty, port = port, host = host, module = Application::module)
         .start(wait = true)

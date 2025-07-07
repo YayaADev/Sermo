@@ -17,7 +17,6 @@ fun Application.configureRouting() {
             call.respondText("OK")
         }
 
-        // Speech API routes
         speechRoutes()
     }
 }
