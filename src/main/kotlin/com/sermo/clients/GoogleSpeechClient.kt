@@ -25,7 +25,7 @@ class GoogleSpeechClient(
                 logger.info("Google Speech API call - Language: $language, Size: ${audioBytes.size} bytes")
 
                 val config = RecognitionConfig.newBuilder()
-                    .setEncoding(RecognitionConfig.AudioEncoding.WEBM_OPUS)
+                    .setEncoding(RecognitionConfig.AudioEncoding.LINEAR16)
                     .setSampleRateHertz(48000)
                     .setLanguageCode(language)
                     .setMaxAlternatives(5)
