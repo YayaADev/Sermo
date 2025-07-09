@@ -1,6 +1,6 @@
 package com.sermo.clients
 
-import com.sermo.models.generated.TranscriptionResponse
+import com.sermo.models.TranscriptionResponse
 
 interface SpeechClient {
     suspend fun transcribe(

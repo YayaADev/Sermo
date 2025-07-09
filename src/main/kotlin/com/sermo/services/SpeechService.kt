@@ -1,7 +1,7 @@
 package com.sermo.services
 
 import com.sermo.clients.SpeechClient
-import com.sermo.models.generated.TranscriptionResponse
+import com.sermo.models.TranscriptionResponse
 import org.slf4j.LoggerFactory
 
 class SpeechService(

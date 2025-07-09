@@ -1,8 +1,8 @@
 package com.sermo.routes
 
-import com.sermo.models.generated.TranscriptionRequest
-import com.sermo.models.generated.ErrorResponse
-import com.sermo.models.generated.ApiError
+import com.sermo.models.TranscriptionRequest
+import com.sermo.models.ErrorResponse
+import com.sermo.models.ApiError
 import com.sermo.services.SpeechService
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call

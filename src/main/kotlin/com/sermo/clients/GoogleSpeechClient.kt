@@ -5,7 +5,7 @@ import com.google.cloud.speech.v1.RecognitionConfig
 import com.google.cloud.speech.v1.RecognizeRequest
 import com.google.cloud.speech.v1.RecognitionAudio
 import com.google.protobuf.ByteString
-import com.sermo.models.generated.TranscriptionResponse
+import com.sermo.models.TranscriptionResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
