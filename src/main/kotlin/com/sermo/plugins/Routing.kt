@@ -1,6 +1,7 @@
 package com.sermo.plugins
 
 import com.sermo.routes.speechRoutes
+import com.sermo.routes.textToSpeechRoutes
 import io.ktor.server.application.Application
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
@@ -18,5 +19,6 @@ fun Application.configureRouting() {
         }
 
         speechRoutes()
+        textToSpeechRoutes()
     }
 }

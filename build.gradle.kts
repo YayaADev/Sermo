@@ -39,8 +39,9 @@ dependencies {
     implementation("io.ktor:ktor-server-openapi:2.3.7")
     implementation("io.ktor:ktor-server-swagger-jvm:2.3.7")
 
-    // Google speech to text
+    // Google Cloud APIs
     implementation("com.google.cloud:google-cloud-speech:4.61.0")
+    implementation("com.google.cloud:google-cloud-texttospeech:2.47.0")
     implementation(platform("com.google.cloud:libraries-bom:26.62.0"))
 
     // Logging
@@ -53,6 +54,7 @@ dependencies {
     testImplementation("io.ktor:ktor-server-tests-jvm")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:1.9.21")
     testImplementation("io.insert-koin:koin-test:3.5.3")
+    implementation(kotlin("stdlib-jdk8"))
 }
 
 kotlin {
