@@ -17,16 +17,11 @@ jobs:
       packages: write
 
     steps:
-      - name: Checkout Sermo repository
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          path: Sermo
 
-      - name: Checkout SermoModels repository
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/SermoModels
-          path: SermoModels
+      - name: Clone SermoModels
+        run: git clone https://github.com/$\{\{ github.repository_owner }}/SermoModels.git ../SermoModels
 
       - name: Log in to Container Registry
         uses: docker/login-action@v2
@@ -38,7 +33,7 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v4
         with:
-          context: .
-          file: ./Sermo/Dockerfile
+          context: ..
+          file: ./Dockerfile
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
