@@ -1,36 +1,36 @@
+# Stage 1: Get SermoModels
+FROM ghcr.io/yayaadev/sermo-models:latest AS models
+
+# Stage 2: Build Sermo
 FROM gradle:8.5-jdk21 AS builder
 
 WORKDIR /app
 
-# Copy entire workspace (includes SermoModels dependency)
+# Copy SermoModels JAR from previous stage
+COPY --from=models /app/models.jar /app/libs/models.jar
+
+# Copy Sermo source
 COPY . .
 
-# Change to Sermo directory and build
-WORKDIR /app/Sermo
+# Build Sermo
 RUN gradle build --no-daemon
 
-# Stage 2: Runtime stage
-FROM openjdk:21-jdk-slim
+# Stage 3: Runtime
+FROM eclipse-temurin:21-jre
 
-# Install curl for health checks
 RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
-
-# Create non-root user
 RUN groupadd -r sermo && useradd -r -g sermo sermo
 
 WORKDIR /app
 
-# Copy JAR from Sermo build
-COPY --from=builder /app/Sermo/build/libs/*.jar app.jar
+# Copy built Sermo JAR
+COPY --from=builder /app/build/libs/sermo-1.0.0.jar app.jar
 
-# Create directories and set permissions
 RUN mkdir -p /app/credentials /app/logs && chown -R sermo:sermo /app
 
 USER sermo
-
 EXPOSE 8080
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
   CMD curl -f http://localhost:8080/health || exit 1
 

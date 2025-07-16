@@ -18,7 +18,7 @@ repositories {
 
 dependencies {
     // SermoModels - API models
-    implementation(project(":SermoModels"))
+    implementation(files("libs/models.jar"))
 
     // Ktor server - only what we need for JSON API
     implementation("io.ktor:ktor-server-core-jvm")
