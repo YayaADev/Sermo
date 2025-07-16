@@ -2,7 +2,7 @@ package com.sermo.clients
 
 import com.sermo.models.TranscriptionResponse
 
-interface SpeechClient {
+interface SpeechToText {
     suspend fun transcribe(
         audioBytes: ByteArray,
         language: String = "en-US",

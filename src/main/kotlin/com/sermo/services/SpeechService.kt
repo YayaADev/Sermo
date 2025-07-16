@@ -1,11 +1,11 @@
 package com.sermo.services
 
-import com.sermo.clients.SpeechClient
+import com.sermo.clients.SpeechToText
 import com.sermo.models.TranscriptionResponse
 import org.slf4j.LoggerFactory
 
 class SpeechService(
-    private val speechClient: SpeechClient
+    private val speechToText: SpeechToText
 ) {
     private val logger = LoggerFactory.getLogger(SpeechService::class.java)
 
@@ -34,7 +34,7 @@ class SpeechService(
         }
         
         // Call the speech client
-        val result = speechClient.transcribe(audioBytes, language, contextPhrases)
+        val result = speechToText.transcribe(audioBytes, language, contextPhrases)
         
         result.fold(
             onSuccess = { transcriptionResult ->

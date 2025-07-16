@@ -1,7 +1,7 @@
 package com.sermo.modules
 
-import com.sermo.clients.SpeechClient
-import com.sermo.clients.GoogleSpeechClient
+import com.sermo.clients.SpeechToText
+import com.sermo.clients.GoogleSpeechToTextClient
 import com.sermo.clients.TextToSpeechClient
 import com.sermo.clients.GoogleTextToSpeechClient
 import com.sermo.services.SpeechService
@@ -10,7 +10,7 @@ import org.koin.dsl.module
 
 val sermoModule = module {
     // Clients layer - external integrations
-    single<SpeechClient> { GoogleSpeechClient(get()) }
+    single<SpeechToText> { GoogleSpeechToTextClient(get()) }
     single<TextToSpeechClient> { GoogleTextToSpeechClient(get()) }
     
     // Services layer - business logic

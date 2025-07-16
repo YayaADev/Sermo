@@ -10,10 +10,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
 
-class GoogleSpeechClient(
+class GoogleSpeechToTextClient(
     private val googleCloudSpeechClient: GoogleCloudSpeechClient
-) : SpeechClient {
-    private val logger = LoggerFactory.getLogger(GoogleSpeechClient::class.java)
+) : SpeechToText {
+    private val logger = LoggerFactory.getLogger(GoogleSpeechToTextClient::class.java)
 
     override suspend fun transcribe(
         audioBytes: ByteArray,
