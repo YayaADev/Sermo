@@ -4,10 +4,10 @@ import com.sermo.clients.SpeechToText
 import com.sermo.models.TranscriptionResponse
 import org.slf4j.LoggerFactory
 
-class SpeechService(
+class SpeechToTextService(
     private val speechToText: SpeechToText
 ) {
-    private val logger = LoggerFactory.getLogger(SpeechService::class.java)
+    private val logger = LoggerFactory.getLogger(SpeechToTextService::class.java)
 
     suspend fun transcribeAudio(
         audioBytes: ByteArray,

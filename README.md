@@ -133,6 +133,113 @@ Environment variables:
 - `SERVER_PORT` - HTTP port (default: 8080)
 - `SERVER_HOST` - Bind address (default: 0.0.0.0)
 
+## Docker Development
+
+### Building and Testing with Docker
+
+**Build Docker image:**
+```bash
+# Build the Docker image locally for testing
+docker build -t test-sermo-backend .
+
+# Build with specific tag
+docker build -t sermo-backend:dev .
+```
+
+**Run Docker container:**
+```bash
+# Run in foreground with logs
+docker run -p 8080:8080 test-sermo-backend
+
+# Run in background (detached)
+docker run -d -p 8080:8080 --name sermo-test test-sermo-backend
+
+# Run with environment variables
+docker run -d -p 8080:8080 \
+  -e SERVER_PORT=8080 \
+  -e SERVER_HOST=0.0.0.0 \
+  --name sermo-test \
+  test-sermo-backend
+```
+
+**Monitor Docker container:**
+```bash
+# Check container status
+docker ps
+
+# View container logs
+docker logs sermo-test
+
+# Follow logs in real-time
+docker logs -f sermo-test
+
+# Check container health
+docker inspect sermo-test | grep Health -A 10
+
+# Test endpoints
+curl http://localhost:8080/health
+curl http://localhost:8080/
+```
+
+**Stop and cleanup:**
+```bash
+# Stop running container
+docker stop sermo-test
+
+# Remove container
+docker rm sermo-test
+
+# Remove image
+docker rmi test-sermo-backend
+
+# Clean up all stopped containers and unused images
+docker system prune -f
+```
+
+**Debug Docker container:**
+```bash
+# Execute shell inside running container
+docker exec -it sermo-test /bin/bash
+
+# Check container resource usage
+docker stats sermo-test
+
+# View container filesystem
+docker exec sermo-test ls -la /app
+```
+
+### Docker Multi-Stage Build
+
+The Dockerfile uses a multi-stage build:
+
+1. **Stage 1**: Pulls SermoModels from `ghcr.io/yayaadev/sermo-models:latest`
+2. **Stage 2**: Builds Sermo backend using Gradle
+3. **Stage 3**: Creates minimal runtime image with JRE
+
+## CORS Support
+
+The API includes CORS support for cross-origin requests (e.g., Obsidian plugins):
+
+- **Allowed Origins**: All origins (`*`) for development
+- **Allowed Methods**: GET, POST, PUT, DELETE, PATCH, OPTIONS
+- **Allowed Headers**: Authorization, Content-Type, and CORS headers
+- **Credentials**: Supported
+
+**Test CORS:**
+```bash
+# Preflight request
+curl -X OPTIONS http://localhost:8080/speech/transcribe \
+  -H "Origin: app://obsidian.md" \
+  -H "Access-Control-Request-Method: POST" \
+  -H "Access-Control-Request-Headers: Content-Type"
+
+# Actual request from Obsidian
+curl -X POST http://localhost:8080/speech/transcribe \
+  -H "Origin: app://obsidian.md" \
+  -H "Content-Type: application/json" \
+  -d '{"audio_data": "...", "language": "en-US"}'
+```
+
 ## Technology Stack
 
 - **Kotlin 1.9.21** - JVM language
@@ -140,3 +247,4 @@ Environment variables:
 - **Netty** - Async HTTP server engine
 - **Gradle 8.5** - Build system
 - **Logback** - Logging framework
+- **Docker** - Containerization and deployment

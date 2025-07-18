@@ -3,7 +3,7 @@ package com.sermo.routes
 import com.sermo.models.TranscriptionRequest
 import com.sermo.models.ErrorResponse
 import com.sermo.models.ApiError
-import com.sermo.services.SpeechService
+import com.sermo.services.SpeechToTextService
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
@@ -16,7 +16,7 @@ import org.slf4j.LoggerFactory
 import java.util.Base64
 
 fun Route.speechRoutes() {
-    val speechService by inject<SpeechService>()
+    val speechToTextService by inject<SpeechToTextService>()
     val logger = LoggerFactory.getLogger("SpeechRoutes")
 
     route("/speech") {
@@ -59,7 +59,7 @@ fun Route.speechRoutes() {
                 val contextPhrases = request.context?.split(",")?.map { it.trim() } ?: emptyList()
 
                 // Call speech service
-                val result = speechService.transcribeAudio(
+                val result = speechToTextService.transcribeAudio(
                     audioBytes = audioBytes,
                     language = request.language ?: "en-US",
                     contextPhrases = contextPhrases

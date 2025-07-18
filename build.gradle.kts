@@ -17,16 +17,21 @@ repositories {
 }
 
 dependencies {
-    // SermoModels - API models
-    implementation(files("libs/models.jar"))
+    // SermoModels - API models (conditional: local project vs Docker jar)
+    if (file("../SermoModels").exists()) {
+        implementation(project(":SermoModels"))
+    } else {
+        implementation(files("libs/models.jar"))
+    }
 
-    // Ktor server - only what we need for JSON API
+    // Ktor server
     implementation("io.ktor:ktor-server-core-jvm")
     implementation("io.ktor:ktor-server-netty-jvm")
     implementation("io.ktor:ktor-server-content-negotiation-jvm")
     implementation("io.ktor:ktor-serialization-kotlinx-json-jvm")
     implementation("io.ktor:ktor-server-call-logging-jvm")
     implementation("io.ktor:ktor-server-status-pages-jvm")
+    implementation("io.ktor:ktor-server-cors-jvm")
 
     // JSON serialization
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
@@ -61,7 +66,6 @@ kotlin {
     jvmToolchain(21)
 }
 
-// Remove OpenAPI generation - using SermoModels instead
 
 tasks.jar {
     manifest {

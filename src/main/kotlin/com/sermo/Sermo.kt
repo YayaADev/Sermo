@@ -1,5 +1,6 @@
 package com.sermo
 
+import com.sermo.plugins.configureCORS
 import com.sermo.plugins.configureDI
 import com.sermo.plugins.configureMonitoring
 import com.sermo.plugins.configureRouting
@@ -23,6 +24,7 @@ fun main() {
 
 fun Application.module() {
     configureDI()
+    configureCORS()
     configureSerialization()
     configureMonitoring()
     configureRouting()
