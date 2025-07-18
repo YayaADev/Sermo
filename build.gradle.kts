@@ -51,6 +51,7 @@ dependencies {
 
     // Logging
     implementation("ch.qos.logback:logback-classic:1.5.13")
+    implementation("net.logstash.logback:logstash-logback-encoder:8.0")
 
     // Coroutines
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")

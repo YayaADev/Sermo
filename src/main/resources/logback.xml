@@ -1,0 +1,42 @@
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+            <providers>
+                <timestamp>
+                    <timeZone>UTC</timeZone>
+                </timestamp>
+                <version/>
+                <logLevel/>
+                <loggerName/>
+                <message/>
+                <mdc/>
+                <arguments/>
+                <stackTrace/>
+            </providers>
+        </encoder>
+    </appender>
+
+    <!-- Application loggers -->
+    <logger name="com.sermo" level="INFO" additivity="false">
+        <appender-ref ref="STDOUT"/>
+    </logger>
+    
+    <!-- Ktor loggers -->
+    <logger name="io.ktor.routing.Routing" level="INFO" additivity="false">
+        <appender-ref ref="STDOUT"/>
+    </logger>
+    
+    <logger name="io.ktor.server.plugins.calllogging.CallLogging" level="INFO" additivity="false">
+        <appender-ref ref="STDOUT"/>
+    </logger>
+
+    <!-- Google Cloud loggers (reduce noise) -->
+    <logger name="com.google.cloud" level="WARN" additivity="false">
+        <appender-ref ref="STDOUT"/>
+    </logger>
+
+    <!-- Root logger -->
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>

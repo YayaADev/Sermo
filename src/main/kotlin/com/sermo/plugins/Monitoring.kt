@@ -1,8 +1,15 @@
 package com.sermo.plugins
 
 import io.ktor.server.application.Application
+import io.ktor.server.application.install
+import io.ktor.server.plugins.callloging.CallLogging
+import org.slf4j.event.Level
 
 fun Application.configureMonitoring() {
-    // Basic monitoring - using existing logback configuration
-    // Add more sophisticated monitoring (Micrometer, Prometheus) as needed
+    install(CallLogging) {
+        level = Level.INFO
+        mdc("requestId") { 
+            java.util.UUID.randomUUID().toString()
+        }
+    }
 }
