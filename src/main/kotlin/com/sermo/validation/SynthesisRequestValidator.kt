@@ -1,7 +1,7 @@
 package com.sermo.validation
 
 import com.sermo.models.SynthesisRequest
-import com.sermo.models.ValidationException
+import com.sermo.exceptions.ValidationException
 
 object SynthesisRequestValidator {
     private const val MAX_TEXT_LENGTH = 5000

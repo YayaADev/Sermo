@@ -5,7 +5,7 @@ import com.sermo.models.ErrorResponse
 import com.sermo.models.ApiError
 import com.sermo.services.SpeechToTextService
 import com.sermo.validation.TranscriptionRequestValidator
-import com.sermo.models.ValidationException
+import com.sermo.exceptions.ValidationException
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
 import io.ktor.server.request.receive

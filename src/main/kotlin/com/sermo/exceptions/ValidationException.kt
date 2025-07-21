@@ -1,4 +1,4 @@
-package com.sermo.models
+package com.sermo.exceptions
 
 class ValidationException(
     val code: String,

@@ -1,7 +1,7 @@
 package com.sermo.validation
 
 import com.sermo.models.TranscriptionRequest
-import com.sermo.models.ValidationException
+import com.sermo.exceptions.ValidationException
 import java.util.Base64
 
 object TranscriptionRequestValidator {

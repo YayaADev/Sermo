@@ -3,7 +3,7 @@ package com.sermo.routes
 import com.sermo.models.SynthesisRequest
 import com.sermo.models.ErrorResponse
 import com.sermo.models.ApiError
-import com.sermo.models.ValidationException
+import com.sermo.exceptions.ValidationException
 import com.sermo.services.TextToSpeechService
 import com.sermo.validation.SynthesisRequestValidator
 import io.ktor.http.HttpStatusCode
