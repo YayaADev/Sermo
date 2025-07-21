@@ -13,7 +13,6 @@ import org.slf4j.LoggerFactory
 class GoogleSpeechToTextClient(
     private val googleCloudSpeechClient: GoogleCloudSpeechClient
 ) : SpeechToText {
-    private val logger = LoggerFactory.getLogger(GoogleSpeechToTextClient::class.java)
 
     override suspend fun transcribe(
         audioBytes: ByteArray,
@@ -79,5 +78,9 @@ class GoogleSpeechToTextClient(
                 Result.failure(e)
             }
         }
+    }
+
+    companion object {
+        private val logger = LoggerFactory.getLogger(GoogleSpeechToTextClient::class.java)
     }
 }

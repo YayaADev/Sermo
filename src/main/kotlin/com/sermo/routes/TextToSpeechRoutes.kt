@@ -3,7 +3,9 @@ package com.sermo.routes
 import com.sermo.models.SynthesisRequest
 import com.sermo.models.ErrorResponse
 import com.sermo.models.ApiError
+import com.sermo.models.ValidationException
 import com.sermo.services.TextToSpeechService
+import com.sermo.validation.SynthesisRequestValidator
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
@@ -21,27 +23,12 @@ fun Route.textToSpeechRoutes() {
     route("/speech") {
         post("/synthesize") {
             try {
-                val request = call.receive<SynthesisRequest>()
-                logger.info("Received synthesis request - Language: ${request.language}, Text length: ${request.text.length}")
+                val rawRequest = call.receive<SynthesisRequest>()
+                val request = SynthesisRequestValidator.validate(rawRequest)
 
-                // Validate request
-                if (request.text.isBlank()) {
-                    call.respond(
-                        HttpStatusCode.BadRequest,
-                        ErrorResponse(
-                            error = ApiError(
-                                code = "INVALID_TEXT",
-                                message = "Text cannot be empty"
-                            )
-                        )
-                    )
-                    return@post
-                }
-
-                // Call text-to-speech service
                 val result = textToSpeechService.synthesizeText(
                     text = request.text,
-                    language = request.language ?: "en-US",
+                    language = request.language,
                     voice = request.voice,
                     speed = request.speed ?: 1.0,
                     pitch = request.pitch ?: 0.0
@@ -55,26 +42,21 @@ fun Route.textToSpeechRoutes() {
                         logger.error("Synthesis failed", error)
                         call.respond(
                             HttpStatusCode.InternalServerError,
-                            ErrorResponse(
-                                error = ApiError(
-                                    code = "SYNTHESIS_ERROR",
-                                    message = "Failed to synthesize text: ${error.message}"
-                                )
-                            )
+                            ErrorResponse(ApiError("SYNTHESIS_ERROR", "Failed to synthesize text: ${error.message}"))
                         )
                     }
                 )
-
-            } catch (e: Exception) {
-                logger.error("Error processing synthesis request", e)
+            } catch (e: ValidationException) {
+                logger.warn("Validation failed: ${e.message}")
                 call.respond(
                     HttpStatusCode.BadRequest,
-                    ErrorResponse(
-                        error = ApiError(
-                            code = "INVALID_REQUEST",
-                            message = "Invalid request format"
-                        )
-                    )
+                    ErrorResponse(ApiError(e.code, e.message))
+                )
+            } catch (e: Exception) {
+                logger.error("Unexpected error", e)
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ErrorResponse(ApiError("INVALID_REQUEST", "Invalid request format"))
                 )
             }
         }

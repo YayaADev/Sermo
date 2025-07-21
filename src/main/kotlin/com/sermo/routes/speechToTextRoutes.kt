@@ -4,6 +4,8 @@ import com.sermo.models.TranscriptionRequest
 import com.sermo.models.ErrorResponse
 import com.sermo.models.ApiError
 import com.sermo.services.SpeechToTextService
+import com.sermo.validation.TranscriptionRequestValidator
+import com.sermo.models.ValidationException
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.call
 import io.ktor.server.request.receive
@@ -13,9 +15,8 @@ import io.ktor.server.routing.post
 import io.ktor.server.routing.route
 import org.koin.ktor.ext.inject
 import org.slf4j.LoggerFactory
-import java.util.Base64
 
-fun Route.speechRoutes() {
+fun Route.speechToTextRoutes() {
     val speechToTextService by inject<SpeechToTextService>()
     val logger = LoggerFactory.getLogger("SpeechRoutes")
 
@@ -25,44 +26,26 @@ fun Route.speechRoutes() {
                 val request = call.receive<TranscriptionRequest>()
                 logger.info("Received transcription request - Language: ${request.language}")
 
-                // Validate request
-                if (request.audio.isBlank()) {
+                val validatedRequest = try {
+                    TranscriptionRequestValidator.validate(request)
+                } catch (e: ValidationException) {
                     call.respond(
                         HttpStatusCode.BadRequest,
                         ErrorResponse(
                             error = ApiError(
-                                code = "INVALID_AUDIO",
-                                message = "Audio data cannot be empty"
+                                code = e.code,
+                                message = e.message
                             )
                         )
                     )
                     return@post
                 }
-
-                // Decode base64 audio
-                val audioBytes = try {
-                    Base64.getDecoder().decode(request.audio)
-                } catch (_: IllegalArgumentException) {
-                    call.respond(
-                        HttpStatusCode.BadRequest,
-                        ErrorResponse(
-                            error = ApiError(
-                                code = "INVALID_BASE64",
-                                message = "Invalid base64 audio data"
-                            )
-                        )
-                    )
-                    return@post
-                }
-
-                // Prepare context phrases
-                val contextPhrases = request.context?.split(",")?.map { it.trim() } ?: emptyList()
 
                 // Call speech service
                 val result = speechToTextService.transcribeAudio(
-                    audioBytes = audioBytes,
-                    language = request.language ?: "en-US",
-                    contextPhrases = contextPhrases
+                    audioBytes = TranscriptionRequestValidator.getDecodedAudio(validatedRequest),
+                    language = TranscriptionRequestValidator.getLanguageCode(validatedRequest),
+                    contextPhrases = TranscriptionRequestValidator.getContextPhrases(validatedRequest)
                 )
 
                 result.fold(
@@ -82,7 +65,6 @@ fun Route.speechRoutes() {
                         )
                     }
                 )
-
             } catch (e: Exception) {
                 logger.error("Error processing transcription request", e)
                 call.respond(

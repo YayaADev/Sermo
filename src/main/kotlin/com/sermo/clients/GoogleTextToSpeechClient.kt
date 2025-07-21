@@ -16,7 +16,6 @@ import java.util.Base64
 class GoogleTextToSpeechClient(
     private val googleCloudTextToSpeechClient: GoogleCloudTextToSpeechClient
 ) : TextToSpeechClient {
-    private val logger = LoggerFactory.getLogger(GoogleTextToSpeechClient::class.java)
 
     override suspend fun synthesize(
         text: String,
@@ -29,35 +28,31 @@ class GoogleTextToSpeechClient(
             try {
                 logger.info("Google Text-to-Speech API call - Language: $language, Text length: ${text.length}")
 
-                // Create synthesis input
                 val input = SynthesisInput.newBuilder()
                     .setText(text)
                     .build()
 
-                // Create voice selection params
                 val voiceParams = VoiceSelectionParams.newBuilder()
                     .setLanguageCode(language)
                     .setSsmlGender(SsmlVoiceGender.NEUTRAL)
                     .apply {
-                        voice?.let { setName(it) }
+                        voice?.let { name = it }
                     }
                     .build()
 
-                // Create audio config
                 val audioConfig = AudioConfig.newBuilder()
                     .setAudioEncoding(AudioEncoding.MP3)
                     .setSpeakingRate(speed)
                     .setPitch(pitch)
                     .build()
 
-                // Create synthesis request
                 val request = SynthesizeSpeechRequest.newBuilder()
                     .setInput(input)
                     .setVoice(voiceParams)
                     .setAudioConfig(audioConfig)
                     .build()
 
-                logger.debug("Calling Google Cloud Text-to-Speech API...")
+                logger.debug("Calling Google Cloud Text-to-Speech API with input {}", request)
                 val response = googleCloudTextToSpeechClient.synthesizeSpeech(request)
 
                 // Convert audio content to base64
@@ -65,8 +60,8 @@ class GoogleTextToSpeechClient(
 
                 val synthesisResult = SynthesisResponse(
                     audio = audioBase64,
-                    audioFormat = "mp3",
-                    durationSeconds = null, // Google API doesn't provide duration
+                    audioFormat = SynthesisResponse.AudioFormat.mp3,
+                    detectedLanguage = language,
                     voiceUsed = voice ?: "${language}-Standard-A"
                 )
 
@@ -78,5 +73,9 @@ class GoogleTextToSpeechClient(
                 Result.failure(e)
             }
         }
+    }
+
+    companion object {
+        private val logger = LoggerFactory.getLogger(GoogleTextToSpeechClient::class.java)
     }
 }

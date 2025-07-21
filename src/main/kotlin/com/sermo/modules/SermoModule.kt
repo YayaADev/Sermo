@@ -6,6 +6,7 @@ import com.sermo.clients.TextToSpeechClient
 import com.sermo.clients.GoogleTextToSpeechClient
 import com.sermo.services.SpeechToTextService
 import com.sermo.services.TextToSpeechService
+import com.sermo.services.LanguageDetectionService
 import org.koin.dsl.module
 
 val sermoModule = module {
@@ -15,5 +16,6 @@ val sermoModule = module {
     
     // Services layer - business logic
     single<SpeechToTextService> { SpeechToTextService(get()) }
-    single<TextToSpeechService> { TextToSpeechService(get()) }
+    single<TextToSpeechService> { TextToSpeechService(get(), get()) }
+    single<LanguageDetectionService> { LanguageDetectionService() }
 }
