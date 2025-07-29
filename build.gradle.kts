@@ -2,6 +2,8 @@ plugins {
     kotlin("jvm") version "1.9.21"
     kotlin("plugin.serialization") version "1.9.21"
     id("io.ktor.plugin") version "2.3.7"
+    id("org.jlleitschuh.gradle.ktlint") version "11.6.1"
+    id("io.gitlab.arturbosch.detekt") version "1.23.5"
     application
 }
 
@@ -14,6 +16,29 @@ application {
 
 repositories {
     mavenCentral()
+}
+
+ktlint {
+    version.set("1.2.1")
+    android.set(false)
+    outputColorName.set("RED")
+    verbose.set(true)
+    reporters {
+        reporter(org.jlleitschuh.gradle.ktlint.reporter.ReporterType.PLAIN)
+    }
+    enableExperimentalRules.set(true)
+    filter {
+        exclude("**/generated/**")
+        include("**/kotlin/**")
+    }
+}
+
+detekt {
+    config.setFrom(files("detekt.yml"))
+    buildUponDefaultConfig = true
+    parallel = true
+    allRules = false
+    ignoreFailures = true
 }
 
 dependencies {
@@ -61,6 +86,7 @@ dependencies {
 
     // OpenAI
     implementation("com.openai:openai-java:2.19.1")
+
     // Testing
     testImplementation("io.ktor:ktor-server-tests-jvm")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:1.9.21")
@@ -71,7 +97,6 @@ dependencies {
 kotlin {
     jvmToolchain(21)
 }
-
 
 tasks.jar {
     manifest {

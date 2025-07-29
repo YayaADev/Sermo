@@ -19,10 +19,10 @@ fun Application.configureCORS() {
         allowHeader(HttpHeaders.AccessControlAllowOrigin)
         allowHeader(HttpHeaders.AccessControlAllowHeaders)
         allowHeader(HttpHeaders.AccessControlAllowMethods)
-        
+
         // Allow all origins for development - you can restrict this for production
         anyHost()
-        
+
         allowCredentials = true
         allowSameOrigin = true
     }

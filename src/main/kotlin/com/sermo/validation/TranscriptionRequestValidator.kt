@@ -1,7 +1,7 @@
 package com.sermo.validation
 
-import com.sermo.models.TranscriptionRequest
 import com.sermo.exceptions.ValidationException
+import com.sermo.models.TranscriptionRequest
 import java.util.Base64
 
 object TranscriptionRequestValidator {
@@ -13,11 +13,12 @@ object TranscriptionRequestValidator {
         }
 
         // Validate base64 format and decode
-        val audioBytes = try {
-            Base64.getDecoder().decode(request.audio)
-        } catch (e: IllegalArgumentException) {
-            throw ValidationException("INVALID_BASE64", "Invalid base64 audio data")
-        }
+        val audioBytes =
+            try {
+                Base64.getDecoder().decode(request.audio)
+            } catch (e: IllegalArgumentException) {
+                throw ValidationException("INVALID_BASE64", "Invalid base64 audio data")
+            }
 
         if (audioBytes.isEmpty()) {
             throw ValidationException("INVALID_AUDIO", "Decoded audio data cannot be empty")

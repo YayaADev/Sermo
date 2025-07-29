@@ -1,0 +1,19 @@
+style:
+  WildcardImport:
+    active: true
+  MagicNumber:
+    active: true
+    ignoreHashCodeFunction: true
+    ignorePropertyDeclaration: true
+    ignoreConstantDeclaration: true
+
+complexity:
+  StringLiteralDuplication:
+    active: true
+    threshold: 3
+
+naming:
+  VariableNaming:
+    active: true
+  FunctionNaming:
+    active: true

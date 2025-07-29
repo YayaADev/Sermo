@@ -6,7 +6,7 @@ import org.slf4j.LoggerFactory
 
 class TextToSpeechService(
     private val textToSpeechClient: TextToSpeechClient,
-    private val languageDetectionService: LanguageDetectionService
+    private val languageDetectionService: LanguageDetectionService,
 ) {
     private val logger = LoggerFactory.getLogger(TextToSpeechService::class.java)
 
@@ -15,7 +15,7 @@ class TextToSpeechService(
         language: String? = null,
         voice: String? = null,
         speed: Double = 1.0,
-        pitch: Double = 0.0
+        pitch: Double = 0.0,
     ): Result<SynthesisResponse> {
         logger.info("Synthesizing text - Length: ${text.length}, Language: ${language ?: "auto-detect"}")
 
@@ -28,7 +28,7 @@ class TextToSpeechService(
             language = effectiveLanguage,
             voice = voice,
             speed = speed,
-            pitch = pitch
+            pitch = pitch,
         ).map { synthesis ->
             SynthesisResponse(
                 audio = synthesis.audio,
@@ -36,7 +36,7 @@ class TextToSpeechService(
                 detectedLanguage = detectionResult.language,
                 languageConfidence = detectionResult.confidence,
                 durationSeconds = synthesis.durationSeconds,
-                voiceUsed = synthesis.voiceUsed
+                voiceUsed = synthesis.voiceUsed,
             )
         }.onSuccess { result ->
             logger.info("Synthesis completed - Format: ${result.audioFormat}, Language: ${result.detectedLanguage}")

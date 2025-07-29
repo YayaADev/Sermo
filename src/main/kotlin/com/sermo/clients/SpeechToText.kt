@@ -6,6 +6,6 @@ interface SpeechToText {
     suspend fun transcribe(
         audioBytes: ByteArray,
         language: String = "en-US",
-        contextPhrases: List<String> = emptyList()
+        contextPhrases: List<String> = emptyList(),
     ): Result<TranscriptionResponse>
 }

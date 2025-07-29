@@ -5,7 +5,6 @@ import com.sermo.models.LanguageDetectionResult
 import org.slf4j.LoggerFactory
 
 class LanguageDetectionService {
-
     private val logger = LoggerFactory.getLogger(LanguageDetectionService::class.java)
 
     private val detector by lazy {
@@ -32,7 +31,6 @@ class LanguageDetectionService {
 
             logger.debug("Detected language: $isoCode -> $ttsLanguageCode (confidence: $confidence)")
             LanguageDetectionResult(ttsLanguageCode, confidence)
-
         }.getOrElse { exception ->
             logger.error("Language detection failed, using default", exception)
             LanguageDetectionResult(DEFAULT_TTS_LANGUAGE, 0.0)
@@ -43,23 +41,24 @@ class LanguageDetectionService {
         private const val DEFAULT_TTS_LANGUAGE = "en-US"
 
         // Optimized mapping focused on TTS-supported languages
-        private val GOOGLE_TTS_CODES = mapOf(
-            "en" to "en-US",
-            "ar" to "ar-EG",  // Egyptian Arabic as specified
-            "es" to "es-ES",
-            "fr" to "fr-FR",
-            "de" to "de-DE",
-            "it" to "it-IT",
-            "pt" to "pt-PT",
-            "ru" to "ru-RU",
-            "zh" to "zh-CN",
-            "ja" to "ja-JP",
-            "ko" to "ko-KR",
-            "hi" to "hi-IN",
-            "nl" to "nl-NL",
-            "th" to "th-TH",
-            "vi" to "vi-VN",
-            "tr" to "tr-TR"
-        )
+        private val GOOGLE_TTS_CODES =
+            mapOf(
+                "en" to "en-US",
+                "ar" to "ar-EG", // Egyptian Arabic as specified
+                "es" to "es-ES",
+                "fr" to "fr-FR",
+                "de" to "de-DE",
+                "it" to "it-IT",
+                "pt" to "pt-PT",
+                "ru" to "ru-RU",
+                "zh" to "zh-CN",
+                "ja" to "ja-JP",
+                "ko" to "ko-KR",
+                "hi" to "hi-IN",
+                "nl" to "nl-NL",
+                "th" to "th-TH",
+                "vi" to "vi-VN",
+                "tr" to "tr-TR",
+            )
     }
 }

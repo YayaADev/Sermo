@@ -8,6 +8,6 @@ interface TextToSpeechClient {
         language: String = "en-US",
         voice: String? = null,
         speed: Double = 1.0,
-        pitch: Double = 0.0
+        pitch: Double = 0.0,
     ): Result<SynthesisResponse>
 }
