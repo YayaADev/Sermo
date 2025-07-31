@@ -1,4 +1,4 @@
-package com.sermo.shared.exceptions
+package com.sermo.exceptions
 
 /**
  * Base exception for all WebSocket-related errors in Sermo

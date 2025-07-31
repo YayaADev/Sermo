@@ -4,6 +4,8 @@ import com.sermo.clients.GoogleSpeechToTextClient
 import com.sermo.clients.GoogleTextToSpeechClient
 import com.sermo.clients.SpeechToText
 import com.sermo.clients.TextToSpeechClient
+import com.sermo.services.AudioStreamingPipeline
+import com.sermo.services.AudioStreamingPipelineImpl
 import com.sermo.services.LanguageDetectionService
 import com.sermo.services.SpeechToTextService
 import com.sermo.services.TextToSpeechService
@@ -19,4 +21,5 @@ val sermoModule =
         single<SpeechToTextService> { SpeechToTextService(get()) }
         single<TextToSpeechService> { TextToSpeechService(get(), get()) }
         single<LanguageDetectionService> { LanguageDetectionService() }
+        single<AudioStreamingPipeline> { AudioStreamingPipelineImpl(get()) }
     }

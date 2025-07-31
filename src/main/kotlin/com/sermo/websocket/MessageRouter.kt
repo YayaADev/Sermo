@@ -1,8 +1,8 @@
-package com.sermo.presentation.websocket
+package com.sermo.websocket
 
-import com.sermo.shared.exceptions.WebSocketFrameTypeException
-import com.sermo.shared.exceptions.WebSocketMessageParsingException
-import com.sermo.shared.exceptions.WebSocketMessageRoutingException
+import com.sermo.exceptions.WebSocketFrameTypeException
+import com.sermo.exceptions.WebSocketMessageParsingException
+import com.sermo.exceptions.WebSocketMessageRoutingException
 import io.ktor.websocket.Frame
 import io.ktor.websocket.readText
 import kotlinx.coroutines.channels.Channel

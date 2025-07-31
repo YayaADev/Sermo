@@ -1,8 +1,9 @@
-package com.sermo.presentation.websocket
+package com.sermo.websocket
 
-import com.sermo.shared.exceptions.WebSocketConnectionException
-import com.sermo.shared.exceptions.WebSocketSessionException
+import com.sermo.exceptions.WebSocketConnectionException
+import com.sermo.exceptions.WebSocketSessionException
 import io.ktor.websocket.DefaultWebSocketSession
+import io.ktor.websocket.Frame
 import io.ktor.websocket.close
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.sync.Mutex
@@ -126,7 +127,7 @@ class ConnectionManager {
         val session = getSession(sessionId)
         if (session != null && session.isActive()) {
             try {
-                session.webSocketSession.send(io.ktor.websocket.Frame.Text(message))
+                session.webSocketSession.send(Frame.Text(message))
                 session.updateActivity()
                 logger.debug("Sent text message to session $sessionId")
             } catch (e: ClosedReceiveChannelException) {
@@ -151,7 +152,7 @@ class ConnectionManager {
         val session = getSession(sessionId)
         if (session != null && session.isActive()) {
             try {
-                session.webSocketSession.send(io.ktor.websocket.Frame.Binary(true, data))
+                session.webSocketSession.send(Frame.Binary(true, data))
                 session.updateActivity()
                 logger.debug("Sent binary message to session $sessionId, size: ${data.size} bytes")
             } catch (e: ClosedReceiveChannelException) {

@@ -1,9 +1,9 @@
 package com.sermo.plugins
 
-import com.sermo.presentation.websocket.WebSocketConstants
-import com.sermo.presentation.websocket.WebSocketHandler
 import com.sermo.routes.speechToTextRoutes
 import com.sermo.routes.textToSpeechRoutes
+import com.sermo.websocket.WebSocketConstants
+import com.sermo.websocket.WebSocketHandler
 import io.ktor.server.application.Application
 import io.ktor.server.application.call
 import io.ktor.server.response.respondText

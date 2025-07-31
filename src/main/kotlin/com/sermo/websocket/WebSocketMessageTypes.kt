@@ -1,4 +1,4 @@
-package com.sermo.presentation.websocket
+package com.sermo.websocket
 
 import kotlinx.serialization.Serializable
 

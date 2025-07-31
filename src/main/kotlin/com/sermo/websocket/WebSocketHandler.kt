@@ -1,6 +1,9 @@
-package com.sermo.presentation.websocket
+package com.sermo.websocket
 
-import com.sermo.shared.exceptions.WebSocketSessionException
+import com.sermo.exceptions.WebSocketSessionException
+import com.sermo.models.AudioStreamConfig
+import com.sermo.models.StreamingTranscriptResult
+import com.sermo.services.AudioStreamingPipeline
 import io.ktor.server.websocket.WebSocketServerSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -10,11 +13,13 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import java.util.concurrent.atomic.AtomicBoolean
@@ -27,6 +32,7 @@ import kotlin.time.Duration.Companion.seconds
 class WebSocketHandler(
     private val connectionManager: ConnectionManager,
     private val messageRouter: MessageRouter,
+    private val audioStreamingPipeline: AudioStreamingPipeline,
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
 ) {
     private val json =
@@ -44,6 +50,8 @@ class WebSocketHandler(
         private const val HEARTBEAT_INTERVAL_MS = 30000L
         private const val SESSION_TIMEOUT_MS = 60000L
         private const val MAX_MESSAGE_SIZE = 1024 * 1024 // 1MB
+        private const val DEFAULT_SAMPLE_RATE_HZ = 16000
+        private const val DEFAULT_BUFFER_SIZE_MS = 100
     }
 
     /**
@@ -77,7 +85,6 @@ class WebSocketHandler(
             val sessionScope = CoroutineScope(coroutineScope.coroutineContext + sessionJob)
 
             // Launch coroutines for handling different types of messages
-            val messageProcessingJob =
                 sessionScope.launch {
                     try {
                         processAudioMessages(channels.audioChunkChannel.receiveAsFlow(), sessionId, sessionActive)
@@ -90,7 +97,6 @@ class WebSocketHandler(
                     }
                 }
 
-            val controlProcessingJob =
                 sessionScope.launch {
                     try {
                         processControlMessages(channels.controlMessageChannel.receiveAsFlow(), sessionId, sessionActive)
@@ -103,7 +109,6 @@ class WebSocketHandler(
                     }
                 }
 
-            val heartbeatJob =
                 sessionScope.launch {
                     try {
                         sendHeartbeat(sessionId, sessionActive)
@@ -147,9 +152,9 @@ class WebSocketHandler(
                         }
                     }
                 }
-            } catch (e: ClosedReceiveChannelException) {
+            } catch (_: ClosedReceiveChannelException) {
                 logger.info("WebSocket connection closed for session $sessionId")
-            } catch (e: TimeoutCancellationException) {
+            } catch (_: TimeoutCancellationException) {
                 logger.warn("Session timeout for $sessionId")
                 sendErrorMessage(sessionId, "SESSION_TIMEOUT", "Session exceeded maximum duration")
             } finally {
@@ -195,10 +200,13 @@ class WebSocketHandler(
      * Processes incoming audio chunk messages with proper error handling
      */
     private suspend fun processAudioMessages(
-        audioFlow: kotlinx.coroutines.flow.Flow<AudioChunkData>,
+        audioFlow: Flow<AudioChunkData>,
         sessionId: String,
         sessionActive: AtomicBoolean,
     ) {
+        var pipelineInitialized = false
+        var transcriptRelayStarted = false
+
         audioFlow.collect { audioChunk ->
             if (!sessionActive.get()) return@collect
 
@@ -220,18 +228,58 @@ class WebSocketHandler(
                         "seq=${audioChunk.sequenceNumber}",
                 )
 
-                // TODO: Forward to speech-to-text processing pipeline
-                // This will be implemented in subsequent tasks (BE-03, BE-04)
-                // Consider adding:
-                // - Audio format validation
-                // - Chunk ordering and buffering
-                // - Audio quality checks
-                // - Rate limiting per session
+                // Initialize audio streaming pipeline on first chunk
+                if (!pipelineInitialized) {
+                    val audioConfig =
+                        AudioStreamConfig(
+                            sampleRateHertz = DEFAULT_SAMPLE_RATE_HZ,
+                            chunkSizeBytes = audioChunk.audioData.size,
+                            bufferSizeMs = DEFAULT_BUFFER_SIZE_MS,
+                        )
 
-                logger.debug("Audio chunk queued for processing: ${audioChunk.sequenceNumber}")
+                    val startResult = audioStreamingPipeline.startStreaming(audioConfig)
+                    if (startResult.isFailure) {
+                        logger.error("Failed to start audio streaming pipeline for session $sessionId", startResult.exceptionOrNull())
+                        sendErrorMessage(sessionId, "PIPELINE_START_ERROR", "Failed to initialize audio processing")
+                        return@collect
+                    }
+
+                    pipelineInitialized = true
+                    logger.info("Audio streaming pipeline initialized for session $sessionId")
+
+                    // Start transcript relay for this session
+                    startTranscriptRelay(sessionId, sessionActive)
+                    transcriptRelayStarted = true
+                }
+
+                // Forward audio chunk to streaming pipeline
+                val processResult = audioStreamingPipeline.processAudioChunk(audioChunk.audioData)
+                if (processResult.isFailure) {
+                    logger.warn(
+                        "Failed to process audio chunk ${audioChunk.sequenceNumber} for session $sessionId",
+                        processResult.exceptionOrNull(),
+                    )
+                    // Continue processing other chunks - don't break the flow for single chunk failures
+                } else {
+                    logger.debug("Audio chunk processed successfully: ${audioChunk.sequenceNumber}")
+                }
             } catch (e: Exception) {
                 logger.error("Error processing audio chunk ${audioChunk.sequenceNumber} for session $sessionId", e)
                 // Don't rethrow - continue processing other chunks
+            }
+        }
+
+        // Stop the audio streaming pipeline when audio flow ends
+        if (pipelineInitialized) {
+            try {
+                val stopResult = audioStreamingPipeline.stopStreaming()
+                if (stopResult.isFailure) {
+                    logger.warn("Failed to stop audio streaming pipeline for session $sessionId", stopResult.exceptionOrNull())
+                } else {
+                    logger.info("Audio streaming pipeline stopped for session $sessionId")
+                }
+            } catch (e: Exception) {
+                logger.error("Error stopping audio streaming pipeline for session $sessionId", e)
             }
         }
     }
@@ -240,7 +288,7 @@ class WebSocketHandler(
      * Processes incoming control messages with enhanced validation
      */
     private suspend fun processControlMessages(
-        controlFlow: kotlinx.coroutines.flow.Flow<ControlMessage>,
+        controlFlow: Flow<ControlMessage>,
         sessionId: String,
         sessionActive: AtomicBoolean,
     ) {
@@ -415,7 +463,7 @@ class WebSocketHandler(
                     status = status,
                     message = message,
                 )
-            val jsonMessage = json.encodeToString(ConnectionStatusMessage.serializer(), statusMessage)
+            val jsonMessage = json.encodeToString(statusMessage)
             connectionManager.sendToSession(sessionId, jsonMessage)
             logger.debug("Sent connection status to session $sessionId: $status")
         } catch (e: Exception) {
@@ -441,7 +489,7 @@ class WebSocketHandler(
                     details = details,
                     timestamp = System.currentTimeMillis(),
                 )
-            val jsonMessage = json.encodeToString(ErrorMessage.serializer(), error)
+            val jsonMessage = json.encodeToString(error)
             connectionManager.sendToSession(sessionId, jsonMessage)
             logger.debug("Sent error message to session $sessionId: $errorCode")
         } catch (e: Exception) {
@@ -467,11 +515,7 @@ class WebSocketHandler(
                             status = ConnectionStatus.CONNECTED,
                             message = "heartbeat",
                         )
-                    val jsonMessage =
-                        json.encodeToString(
-                            ConnectionStatusMessage.serializer(),
-                            heartbeat,
-                        )
+                    val jsonMessage = json.encodeToString(heartbeat)
                     connectionManager.sendToSession(sessionId, jsonMessage)
                     logger.debug("Sent heartbeat to session $sessionId")
                 } else {
@@ -512,11 +556,7 @@ class WebSocketHandler(
                     confidence = confidence,
                     timestamp = System.currentTimeMillis(),
                 )
-            val jsonMessage =
-                json.encodeToString(
-                    PartialTranscriptMessage.serializer(),
-                    transcriptMessage,
-                )
+            val jsonMessage = json.encodeToString(transcriptMessage)
             connectionManager.sendToSession(sessionId, jsonMessage)
             logger.debug("Sent partial transcript to session $sessionId")
         } catch (e: Exception) {
@@ -554,11 +594,7 @@ class WebSocketHandler(
                     languageCode = languageCode,
                     timestamp = System.currentTimeMillis(),
                 )
-            val jsonMessage =
-                json.encodeToString(
-                    FinalTranscriptMessage.serializer(),
-                    transcriptMessage,
-                )
+            val jsonMessage = json.encodeToString(transcriptMessage)
             connectionManager.sendToSession(sessionId, jsonMessage)
             logger.debug("Sent final transcript to session $sessionId")
         } catch (e: Exception) {
@@ -606,13 +642,133 @@ class WebSocketHandler(
                     sessionId = sessionId,
                     timestamp = System.currentTimeMillis(),
                 )
-            val jsonMessage = json.encodeToString(ConversationStateMessage.serializer(), stateMessage)
+            val jsonMessage = json.encodeToString(stateMessage)
             connectionManager.sendToSession(sessionId, jsonMessage)
             logger.debug("Sent conversation state to session $sessionId: $state")
         } catch (e: Exception) {
             logger.error("Failed to send conversation state to session $sessionId", e)
             throw WebSocketSessionException("Failed to send conversation state", e)
         }
+    }
+
+    /**
+     * Starts transcript relay for a specific session
+     */
+    private fun startTranscriptRelay(
+        sessionId: String,
+        sessionActive: AtomicBoolean,
+    ) {
+        coroutineScope.launch {
+            try {
+                logger.debug("Starting transcript relay for session $sessionId")
+
+                // Subscribe to STT transcript flow from the audio streaming pipeline
+                // Note: This assumes the AudioStreamingPipeline has access to the STT client
+                // and can provide access to the transcript flow
+
+                // For now, we'll get the STT client through the pipeline
+                // This is a simplified approach until we implement proper dependency injection
+
+                // TODO: Get the StreamingSpeechToText client and subscribe to its transcript flow
+                // val sttClient = audioStreamingPipeline.getStreamingSpeechToTextClient()
+                // sttClient.getTranscriptFlow()
+                //     .catch { exception ->
+                //         logger.error("Error in transcript flow for session $sessionId", exception)
+                //     }
+                //     .collect { transcriptResult ->
+                //         if (sessionActive.get()) {
+                //             relayTranscriptToSession(sessionId, transcriptResult)
+                //         }
+                //     }
+
+                logger.info("Transcript relay started for session $sessionId")
+            } catch (e: Exception) {
+                logger.error("Failed to start transcript relay for session $sessionId", e)
+            }
+        }
+    }
+
+    /**
+     * Relays a transcript result to a specific session
+     */
+    private suspend fun relayTranscriptToSession(
+        sessionId: String,
+        result: StreamingTranscriptResult,
+    ) {
+        try {
+            // Validate transcript result
+            if (!isValidTranscriptResult(result)) {
+                logger.debug("Skipping invalid transcript result for session $sessionId: $result")
+                return
+            }
+
+            logger.debug(
+                "Relaying transcript result to session $sessionId: '${result.transcript}' " +
+                    "(confidence: ${String.format("%.2f", result.confidence)}, " +
+                    "final: ${result.isFinal}, language: ${result.languageCode})",
+            )
+
+            if (result.isFinal) {
+                // Send final transcript
+                sendFinalTranscript(
+                    sessionId = sessionId,
+                    transcript = result.transcript,
+                    confidence = result.confidence,
+                    languageCode = result.languageCode,
+                )
+
+                logger.debug("Sent final transcript to session $sessionId: '${result.transcript}'")
+            } else {
+                // Send partial transcript
+                sendPartialTranscript(
+                    sessionId = sessionId,
+                    transcript = result.transcript,
+                    confidence = result.confidence,
+                )
+
+                logger.debug("Sent partial transcript to session $sessionId: '${result.transcript}'")
+            }
+        } catch (e: Exception) {
+            logger.error("Failed to relay transcript to session $sessionId", e)
+        }
+    }
+
+    /**
+     * Validates a transcript result before relaying
+     */
+    private fun isValidTranscriptResult(result: StreamingTranscriptResult): Boolean {
+        // Check confidence threshold
+        val minConfidenceThreshold = 0.1f
+        if (result.confidence < minConfidenceThreshold) {
+            logger.debug("Transcript confidence too low: ${result.confidence}")
+            return false
+        }
+
+        // Check transcript length
+        val trimmedTranscript = result.transcript.trim()
+        if (trimmedTranscript.length < 1) {
+            logger.debug("Transcript too short: '$trimmedTranscript'")
+            return false
+        }
+
+        if (trimmedTranscript.length > 5000) {
+            logger.debug("Transcript too long: ${trimmedTranscript.length} characters")
+            return false
+        }
+
+        // Check for empty or whitespace-only transcripts
+        if (trimmedTranscript.isBlank()) {
+            logger.debug("Transcript is blank")
+            return false
+        }
+
+        // Check language code
+        if (result.languageCode.isBlank()) {
+            logger.debug("Missing language code")
+            return false
+        }
+
+        return true
     }
 
     /**

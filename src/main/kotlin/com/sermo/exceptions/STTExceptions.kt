@@ -1,4 +1,4 @@
-package com.sermo.shared.exceptions
+package com.sermo.exceptions
 
 /**
  * Base exception class for all Speech-to-Text related errors
