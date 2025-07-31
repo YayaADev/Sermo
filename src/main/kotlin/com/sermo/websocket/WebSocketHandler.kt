@@ -85,40 +85,40 @@ class WebSocketHandler(
             val sessionScope = CoroutineScope(coroutineScope.coroutineContext + sessionJob)
 
             // Launch coroutines for handling different types of messages
-                sessionScope.launch {
-                    try {
-                        processAudioMessages(channels.audioChunkChannel.receiveAsFlow(), sessionId, sessionActive)
-                    } catch (e: CancellationException) {
-                        logger.debug("Audio processing cancelled for session $sessionId")
-                        throw e
-                    } catch (e: Exception) {
-                        logger.error("Audio processing failed for session $sessionId", e)
-                        sendErrorMessage(sessionId, "AUDIO_PROCESSING_FATAL", e.message ?: "Audio processing failed")
-                    }
+            sessionScope.launch {
+                try {
+                    processAudioMessages(channels.audioChunkChannel.receiveAsFlow(), sessionId, sessionActive)
+                } catch (e: CancellationException) {
+                    logger.debug("Audio processing cancelled for session $sessionId")
+                    throw e
+                } catch (e: Exception) {
+                    logger.error("Audio processing failed for session $sessionId", e)
+                    sendErrorMessage(sessionId, "AUDIO_PROCESSING_FATAL", e.message ?: "Audio processing failed")
                 }
+            }
 
-                sessionScope.launch {
-                    try {
-                        processControlMessages(channels.controlMessageChannel.receiveAsFlow(), sessionId, sessionActive)
-                    } catch (e: CancellationException) {
-                        logger.debug("Control processing cancelled for session $sessionId")
-                        throw e
-                    } catch (e: Exception) {
-                        logger.error("Control processing failed for session $sessionId", e)
-                        sendErrorMessage(sessionId, "CONTROL_PROCESSING_FATAL", e.message ?: "Control processing failed")
-                    }
+            sessionScope.launch {
+                try {
+                    processControlMessages(channels.controlMessageChannel.receiveAsFlow(), sessionId, sessionActive)
+                } catch (e: CancellationException) {
+                    logger.debug("Control processing cancelled for session $sessionId")
+                    throw e
+                } catch (e: Exception) {
+                    logger.error("Control processing failed for session $sessionId", e)
+                    sendErrorMessage(sessionId, "CONTROL_PROCESSING_FATAL", e.message ?: "Control processing failed")
                 }
+            }
 
-                sessionScope.launch {
-                    try {
-                        sendHeartbeat(sessionId, sessionActive)
-                    } catch (e: CancellationException) {
-                        logger.debug("Heartbeat cancelled for session $sessionId")
-                        throw e
-                    } catch (e: Exception) {
-                        logger.error("Heartbeat failed for session $sessionId", e)
-                    }
+            sessionScope.launch {
+                try {
+                    sendHeartbeat(sessionId, sessionActive)
+                } catch (e: CancellationException) {
+                    logger.debug("Heartbeat cancelled for session $sessionId")
+                    throw e
+                } catch (e: Exception) {
+                    logger.error("Heartbeat failed for session $sessionId", e)
                 }
+            }
 
             try {
                 // Main message handling loop with timeout

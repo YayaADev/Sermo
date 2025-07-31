@@ -36,6 +36,7 @@ import kotlin.time.measureTime
  */
 class AudioStreamingPipelineImpl(
     private val streamingSpeechToText: StreamingSpeechToText,
+    private val turnDetectionService: TurnDetectionService? = null,
 ) : AudioStreamingPipeline {
     companion object {
         private val logger = LoggerFactory.getLogger(AudioStreamingPipelineImpl::class.java)
@@ -326,6 +327,20 @@ class AudioStreamingPipelineImpl(
 
                 if (bufferStartTime == 0L) {
                     bufferStartTime = audioChunk.timestamp
+                }
+
+                // Process audio chunk for turn detection if service is available
+                turnDetectionService?.let { turnService ->
+                    try {
+                        // Use a dummy session ID for now - this should be passed from WebSocket handler
+                        val sessionId = "default-session"
+                        val turnResult = turnService.processAudioChunk(sessionId, audioChunk.data)
+                        if (turnResult.isFailure) {
+                            logger.warn("Turn detection failed for chunk: ${turnResult.exceptionOrNull()?.message}")
+                        }
+                    } catch (e: Exception) {
+                        logger.warn("Error in turn detection processing", e)
+                    }
                 }
 
                 // Forward to processed audio flow
