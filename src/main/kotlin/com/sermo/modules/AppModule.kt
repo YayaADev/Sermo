@@ -7,4 +7,5 @@ val appModule =
         includes(googleCloudModule)
         includes(openAIModule)
         includes(sermoModule)
+        includes(webSocketModule)
     }

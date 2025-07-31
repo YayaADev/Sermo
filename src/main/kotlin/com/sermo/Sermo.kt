@@ -5,6 +5,7 @@ import com.sermo.plugins.configureDI
 import com.sermo.plugins.configureMonitoring
 import com.sermo.plugins.configureRouting
 import com.sermo.plugins.configureSerialization
+import com.sermo.plugins.configureWebSockets
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationStopped
 import io.ktor.server.engine.embeddedServer
@@ -30,6 +31,7 @@ fun Application.module() {
     configureDI()
     configureCORS()
     configureSerialization()
+    configureWebSockets()
     configureMonitoring()
     configureRouting()
 

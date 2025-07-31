@@ -19,13 +19,7 @@ RUN gradle build --no-daemon --parallel
 FROM eclipse-temurin:21-jre
 
 # Install system dependencies for audio processing and monitoring
-RUN apt-get update && apt-get install -y \
-    curl \
-    htop \
-    iotop \
-    net-tools \
-    tcpdump \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 # Create sermo user and group
 RUN groupadd -r sermo && useradd -r -g sermo sermo
