@@ -8,6 +8,8 @@ import com.sermo.services.AudioLevelAnalyzer
 import com.sermo.services.AudioLevelAnalyzerImpl
 import com.sermo.services.AudioStreamingPipeline
 import com.sermo.services.AudioStreamingPipelineImpl
+import com.sermo.services.ConversationFlowManager
+import com.sermo.services.ConversationFlowManagerImpl
 import com.sermo.services.LanguageDetectionService
 import com.sermo.services.SilenceDetector
 import com.sermo.services.SilenceDetectorImpl
@@ -33,4 +35,7 @@ val sermoModule =
         single<TextToSpeechService> { TextToSpeechService(get(), get()) }
         single<LanguageDetectionService> { LanguageDetectionService() }
         single<AudioStreamingPipeline> { AudioStreamingPipelineImpl(get(), get()) }
+
+        // Conversation flow layer - integrates GPT responses with turn detection
+        single<ConversationFlowManager> { ConversationFlowManagerImpl(get(), get(), get(), get()) }
     }
