@@ -43,10 +43,10 @@ detekt {
 
 dependencies {
     // SermoModels - API models (conditional: local project vs Docker jar)
-    if (file("../SermoModels").exists()) {
-        implementation(project(":SermoModels"))
-    } else {
+    if (file("libs/models.jar").exists()) {
         implementation(files("libs/models.jar"))
+    } else {
+        implementation(project(":SermoModels"))
     }
 
     // Ktor server
