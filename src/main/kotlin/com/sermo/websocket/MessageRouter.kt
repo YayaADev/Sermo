@@ -1,6 +1,5 @@
 package com.sermo.websocket
 
-import com.sermo.exceptions.WebSocketFrameTypeException
 import com.sermo.exceptions.WebSocketMessageParsingException
 import com.sermo.exceptions.WebSocketMessageRoutingException
 import io.ktor.websocket.Frame
@@ -15,9 +14,9 @@ import org.slf4j.LoggerFactory
 /**
  * Routes WebSocket messages based on frame type and message content
  */
-class MessageRouter {
-    private val json = Json { ignoreUnknownKeys = true }
-
+class MessageRouter(
+    private val json: Json,
+) {
     companion object {
         private val logger = LoggerFactory.getLogger(MessageRouter::class.java)
         private const val MESSAGE_TYPE_FIELD = "type"
@@ -59,9 +58,6 @@ class MessageRouter {
                 is Frame.Ping, is Frame.Pong -> {
                     logger.debug("Ping/Pong frame received for session $sessionId")
                     // Handle ping/pong frames for connection keep-alive
-                }
-                else -> {
-                    throw WebSocketFrameTypeException("Unsupported frame type: ${frame::class.simpleName}")
                 }
             }
         } catch (e: Exception) {
@@ -117,16 +113,19 @@ class MessageRouter {
     }
 
     /**
-     * Parses message type from JSON text
+     * Parses message type from JSON text. (We should never receive json)
      */
     private fun parseMessageType(messageText: String): WebSocketMessageType {
         return try {
-            val jsonObject = json.parseToJsonElement(messageText) as JsonObject
+            val jsonObject =
+                json.parseToJsonElement(messageText) as? JsonObject
+                    ?: throw WebSocketMessageParsingException("Invalid JSON: Not an object")
+
             val typeString =
                 jsonObject[MESSAGE_TYPE_FIELD]?.jsonPrimitive?.content
-                    ?: throw WebSocketMessageParsingException("Message type field missing")
+                    ?: throw WebSocketMessageParsingException("Missing 'type' field in message")
 
-            WebSocketMessageType.values().find { it.value == typeString }
+            WebSocketMessageType.entries.firstOrNull { it.value == typeString }
                 ?: WebSocketMessageType.ERROR
         } catch (e: Exception) {
             logger.warn("Failed to parse message type from: $messageText", e)

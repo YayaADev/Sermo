@@ -1,6 +1,7 @@
 package com.sermo.validation
 
 import com.sermo.exceptions.ValidationException
+import com.sermo.models.Constants.DEFAULT_LANGUAGE_CODE
 import com.sermo.models.TranscriptionRequest
 import java.util.Base64
 
@@ -42,7 +43,7 @@ object TranscriptionRequestValidator {
     }
 
     fun getLanguageCode(request: TranscriptionRequest): String {
-        return request.language ?: "en-US"
+        return request.language ?: DEFAULT_LANGUAGE_CODE
     }
 
     fun getContextPhrases(request: TranscriptionRequest): List<String> {

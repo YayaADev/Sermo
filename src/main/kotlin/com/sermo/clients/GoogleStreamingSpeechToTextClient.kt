@@ -75,7 +75,9 @@ class GoogleStreamingSpeechToTextClient(
                 // Create new coroutine scope for this streaming session
                 streamingScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-                // Initialize streaming recognition
+                // Automatically detects when the speaker stops talking.
+                // Sends a final transcript and then ends the stream.
+                // Triggers a special event internally: END_OF_SINGLE_UTTERANCE
                 val recognitionConfig = createRecognitionConfig(config)
                 val streamingConfig =
                     StreamingRecognitionConfig.newBuilder()

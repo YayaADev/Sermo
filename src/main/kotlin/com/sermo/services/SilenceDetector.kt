@@ -17,7 +17,7 @@ interface SilenceDetector {
     /**
      * Processes audio level analysis and updates silence detection state
      */
-    fun processAudioLevel(analysis: AudioLevelAnalysis)
+    fun processAudioLevel(analysis: AudioLevelAnalyzer.AudioLevelAnalysis)
 
     /**
      * Gets a flow of silence detection events
@@ -79,7 +79,7 @@ data class SilenceDetectionState(
  * Implementation of silence detector with configurable threshold
  */
 class SilenceDetectorImpl(
-    private val initialThresholdMs: Long = DEFAULT_SILENCE_THRESHOLD_MS,
+    initialThresholdMs: Long = DEFAULT_SILENCE_THRESHOLD_MS,
 ) : SilenceDetector {
     companion object {
         private val logger = LoggerFactory.getLogger(SilenceDetectorImpl::class.java)
@@ -105,7 +105,7 @@ class SilenceDetectorImpl(
     private var consecutiveSilentChunks = 0
     private var consecutiveSpeechChunks = 0
 
-    override fun processAudioLevel(analysis: AudioLevelAnalysis) {
+    override fun processAudioLevel(analysis: AudioLevelAnalyzer.AudioLevelAnalysis) {
         if (!isEnabled.get()) {
             return
         }

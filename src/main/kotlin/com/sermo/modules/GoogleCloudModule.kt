@@ -9,46 +9,20 @@ import org.slf4j.LoggerFactory
 
 val googleCloudModule =
     module {
+        val logger = LoggerFactory.getLogger("GoogleCloudModule")
 
         single<SpeechClient> {
-            val logger = LoggerFactory.getLogger("GoogleCloudModule")
-
-            try {
-                logger.info("Creating Google Cloud Speech client...")
-                val client = SpeechClient.create()
-                logger.info("Google Cloud Speech client created successfully")
-                client
-            } catch (e: Exception) {
-                logger.error(" Failed to create Google Cloud Speech client", e)
-                throw e
-            }
+            logger.info("Creating Google Cloud Speech client...")
+            SpeechClient.create()
         }
 
         single<TextToSpeechClient> {
-            val logger = LoggerFactory.getLogger("GoogleCloudModule")
-
-            try {
-                logger.info("Creating Google Cloud Text-to-Speech client...")
-                val client = TextToSpeechClient.create()
-                logger.info("Google Cloud Text-to-Speech client created successfully")
-                client
-            } catch (e: Exception) {
-                logger.error("Failed to create Google Cloud Text-to-Speech client", e)
-                throw e
-            }
+            logger.info("Creating Google Cloud Text-to-Speech client...")
+            TextToSpeechClient.create()
         }
 
         single<StreamingSpeechToText> {
-            val logger = LoggerFactory.getLogger("GoogleCloudModule")
-
-            try {
-                logger.info("Creating Google Streaming Speech-to-Text client...")
-                val client = GoogleStreamingSpeechToTextClient(get())
-                logger.info("Google Streaming Speech-to-Text client created successfully")
-                client
-            } catch (e: Exception) {
-                logger.error("Failed to create Google Streaming Speech-to-Text client", e)
-                throw e
-            }
+            logger.info("Creating Google Streaming Speech-to-Text client...")
+            GoogleStreamingSpeechToTextClient(get())
         }
     }

@@ -2,8 +2,10 @@ package com.sermo.websocket
 
 import com.sermo.exceptions.WebSocketSessionException
 import com.sermo.models.AudioStreamConfig
+import com.sermo.models.Constants.DEFAULT_LANGUAGE_CODE
 import com.sermo.models.StreamingTranscriptResult
 import com.sermo.services.AudioStreamingPipeline
+import com.sermo.services.SessionStateManagerImpl
 import io.ktor.server.websocket.WebSocketServerSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,15 +35,10 @@ class WebSocketHandler(
     private val connectionManager: ConnectionManager,
     private val messageRouter: MessageRouter,
     private val audioStreamingPipeline: AudioStreamingPipeline,
+    private val sessionStateManager: SessionStateManagerImpl,
+    private val json: Json,
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
 ) {
-    private val json =
-        Json {
-            ignoreUnknownKeys = true
-            encodeDefaults = false
-            isLenient = true
-        }
-
     private val sessionMutex = Mutex()
     private val activeSessions = mutableSetOf<String>()
 
@@ -70,6 +67,14 @@ class WebSocketHandler(
 
             sessionMutex.withLock {
                 activeSessions.add(sessionId)
+            }
+
+            // Create session state in SessionStateManager
+            val sessionCreationResult = sessionStateManager.createSession(sessionId, DEFAULT_LANGUAGE_CODE)
+            if (sessionCreationResult.isFailure) {
+                logger.error("Failed to create session state for $sessionId", sessionCreationResult.exceptionOrNull())
+                sendErrorMessage(sessionId, "SESSION_STATE_ERROR", "Failed to initialize session state")
+                return
             }
 
             logger.info("WebSocket connection established: $sessionId")

@@ -1,6 +1,7 @@
 package com.sermo.services
 
 import com.sermo.clients.SpeechToText
+import com.sermo.models.Constants.DEFAULT_LANGUAGE_CODE
 import com.sermo.models.TranscriptionResponse
 import org.slf4j.LoggerFactory
 
@@ -11,7 +12,7 @@ class SpeechToTextService(
 
     suspend fun transcribeAudio(
         audioBytes: ByteArray,
-        language: String = "en-US",
+        language: String = DEFAULT_LANGUAGE_CODE,
         contextPhrases: List<String> = emptyList(),
     ): Result<TranscriptionResponse> {
         logger.info("Starting speech transcription - Language: $language, Audio size: ${audioBytes.size} bytes")

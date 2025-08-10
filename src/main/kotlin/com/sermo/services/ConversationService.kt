@@ -1,6 +1,7 @@
 package com.sermo.services
 
 import com.sermo.clients.ConversationAIClient
+import com.sermo.models.Constants.DEFAULT_LANGUAGE_CODE
 import com.sermo.models.ConversationResponse
 import org.slf4j.LoggerFactory
 import sermo.protocol.SermoProtocol.ConversationTurn
@@ -12,7 +13,7 @@ class ConversationService(
 
     suspend fun generateResponse(
         userMessage: String,
-        language: String = "en-US",
+        language: String = DEFAULT_LANGUAGE_CODE,
         conversationHistory: List<ConversationTurn> = emptyList(),
     ): Result<ConversationResponse> {
         logger.info("Generating conversation response - Language: $language, Message: '${userMessage.take(50)}...'")

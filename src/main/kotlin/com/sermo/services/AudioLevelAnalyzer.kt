@@ -7,47 +7,11 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
- * Analyzes PCM audio level data to calculate amplitude and energy metrics for silence detection
+ * Analyzes PCM audio level data to calculate amplitude and energy metrics for silence detection PCM 16-bit audio data
  */
-interface AudioLevelAnalyzer {
-    /**
-     * Analyzes an audio chunk and returns level analysis results
-     */
-    fun analyzeAudioLevel(audioData: ByteArray): AudioLevelAnalysis
-
-    /**
-     * Gets the current audio level threshold for silence detection
-     */
-    fun getSilenceThreshold(): Float
-
-    /**
-     * Updates the silence threshold based on background noise analysis
-     */
-    fun updateSilenceThreshold(threshold: Float)
-
-    /**
-     * Resets the analyzer state for a new conversation session
-     */
-    fun reset()
-}
-
-/**
- * Results of audio level analysis for a single audio chunk
- */
-data class AudioLevelAnalysis(
-    val amplitude: Float,
-    val rmsLevel: Float,
-    val energyLevel: Float,
-    val isSilent: Boolean,
-    val timestamp: Long,
-)
-
-/**
- * Implementation of audio level analyzer for PCM 16-bit audio data
- */
-class AudioLevelAnalyzerImpl : AudioLevelAnalyzer {
+class AudioLevelAnalyzer {
     companion object {
-        private val logger = LoggerFactory.getLogger(AudioLevelAnalyzerImpl::class.java)
+        private val logger = LoggerFactory.getLogger(AudioLevelAnalyzer::class.java)
         private const val BYTES_PER_SAMPLE_16BIT = 2
         private const val MAX_16BIT_VALUE = 32767.0f
         private const val DEFAULT_SILENCE_THRESHOLD = 0.02f
@@ -60,7 +24,10 @@ class AudioLevelAnalyzerImpl : AudioLevelAnalyzer {
     private val noiseFloorBuffer = mutableListOf<Float>()
     private var adaptiveThresholdEnabled = true
 
-    override fun analyzeAudioLevel(audioData: ByteArray): AudioLevelAnalysis {
+    /**
+     * Analyzes an audio chunk and returns level analysis results
+     */
+    fun analyzeAudioLevel(audioData: ByteArray): AudioLevelAnalysis {
         if (audioData.isEmpty()) {
             throw AudioProcessingException("Audio data is empty")
         }
@@ -99,9 +66,15 @@ class AudioLevelAnalyzerImpl : AudioLevelAnalyzer {
         return analysis
     }
 
-    override fun getSilenceThreshold(): Float = silenceThreshold
+    /**
+     * Gets the current audio level threshold for silence detection
+     */
+    fun getSilenceThreshold(): Float = silenceThreshold
 
-    override fun updateSilenceThreshold(threshold: Float) {
+    /**
+     * Updates the silence threshold based on background noise analysis
+     */
+    fun updateSilenceThreshold(threshold: Float) {
         if (threshold < MIN_SILENCE_THRESHOLD || threshold > MAX_SILENCE_THRESHOLD) {
             throw AudioProcessingException(
                 "Silence threshold out of valid range: $threshold " +
@@ -115,7 +88,10 @@ class AudioLevelAnalyzerImpl : AudioLevelAnalyzer {
         logger.info("Updated silence threshold from $oldThreshold to $threshold")
     }
 
-    override fun reset() {
+    /**
+     * Resets the analyzer state for a new conversation session
+     */
+    fun reset() {
         silenceThreshold = DEFAULT_SILENCE_THRESHOLD
         noiseFloorBuffer.clear()
         logger.debug("Audio level analyzer reset")
@@ -235,4 +211,15 @@ class AudioLevelAnalyzerImpl : AudioLevelAnalyzer {
             }
         }
     }
+
+    /**
+     * Results of audio level analysis for a single audio chunk
+     */
+    data class AudioLevelAnalysis(
+        val amplitude: Float,
+        val rmsLevel: Float,
+        val energyLevel: Float,
+        val isSilent: Boolean,
+        val timestamp: Long,
+    )
 }

@@ -2,6 +2,7 @@ package com.sermo.services
 
 import com.sermo.clients.TextToSpeechClient
 import com.sermo.exceptions.TTSException
+import com.sermo.models.Constants.DEFAULT_LANGUAGE_CODE
 import com.sermo.models.SynthesisResponse
 import com.sermo.models.TTSAudioChunk
 import com.sermo.models.TTSStreamConfig
@@ -36,7 +37,7 @@ interface StreamingTextToSpeechService {
     suspend fun startTTSStreaming(
         sessionId: String,
         text: String,
-        languageCode: String = "en-US",
+        languageCode: String = DEFAULT_LANGUAGE_CODE,
         voice: String? = null,
         streamConfig: TTSStreamConfig = TTSStreamConfig(),
     ): Result<Unit>
