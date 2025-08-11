@@ -28,17 +28,18 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import org.slf4j.LoggerFactory
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Google Cloud Speech-to-Text streaming client with gRPC streaming support
+ * Google Cloud Speech-to-Text streaming client with built-in turn detection
+ * Simplified version without complex auto-restart logic
  */
 class GoogleStreamingSpeechToTextClient(
     private val speechClient: SpeechClient,
@@ -47,11 +48,18 @@ class GoogleStreamingSpeechToTextClient(
         private val logger = LoggerFactory.getLogger(GoogleStreamingSpeechToTextClient::class.java)
         private val STREAM_TIMEOUT_DURATION = 5.minutes
         private val CONNECTION_TIMEOUT_DURATION = 30.seconds
-        private val AUDIO_CHUNK_MAX_SIZE = 65536
+        private const val AUDIO_CHUNK_MAX_SIZE = 65536
     }
 
     private val streamState = AtomicReference(STTStreamState.DISCONNECTED)
-    private val transcriptFlow = MutableSharedFlow<StreamingTranscriptResult>(replay = 0, extraBufferCapacity = 100)
+
+    // Fixed: Limited buffer to prevent memory accumulation
+    private val transcriptFlow =
+        MutableSharedFlow<StreamingTranscriptResult>(
+            replay = 0,
+            extraBufferCapacity = 10,
+            onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST,
+        )
     private val streamMutex = Mutex()
 
     private var streamingScope: CoroutineScope? = null
@@ -59,10 +67,21 @@ class GoogleStreamingSpeechToTextClient(
     private var currentConfig: STTStreamConfig? = null
     private var requestObserver: ClientStream<StreamingRecognizeRequest>? = null
 
+    // Simplified state management
+    private val isShuttingDown = AtomicBoolean(false)
+    private var sessionId: String? = null
+
     override suspend fun startStreaming(config: STTStreamConfig): Result<Unit> =
         streamMutex.withLock {
             return try {
-                logger.info("Starting STT streaming session with language: ${config.languageCode}")
+                if (isShuttingDown.get()) {
+                    return Result.failure(STTConnectionException("Client is shutting down"))
+                }
+
+                logger.info(
+                    "Starting STT streaming session with language: ${config.languageCode}, " +
+                        "singleUtterance: ${config.singleUtterance}",
+                )
 
                 if (streamState.get() != STTStreamState.DISCONNECTED) {
                     logger.warn("Attempting to start stream while in state: ${streamState.get()}")
@@ -72,12 +91,10 @@ class GoogleStreamingSpeechToTextClient(
                 streamState.set(STTStreamState.CONNECTING)
                 currentConfig = config
 
-                // Create new coroutine scope for this streaming session
+                // Create new coroutine scope
+                streamingScope?.cancel()
                 streamingScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-                // Automatically detects when the speaker stops talking.
-                // Sends a final transcript and then ends the stream.
-                // Triggers a special event internally: END_OF_SINGLE_UTTERANCE
                 val recognitionConfig = createRecognitionConfig(config)
                 val streamingConfig =
                     StreamingRecognitionConfig.newBuilder()
@@ -94,7 +111,6 @@ class GoogleStreamingSpeechToTextClient(
 
                     requestObserver = streamingCallable.splitCall(responseObserver)
 
-                    // Send initial configuration request
                     val configRequest =
                         StreamingRecognizeRequest.newBuilder()
                             .setStreamingConfig(streamingConfig)
@@ -123,7 +139,7 @@ class GoogleStreamingSpeechToTextClient(
         }
 
     override suspend fun sendAudioChunk(audioData: ByteArray): Result<Unit> {
-        if (!isStreamActive()) {
+        if (!isStreamActive() || isShuttingDown.get()) {
             return Result.failure(STTConnectionException("Stream is not active"))
         }
 
@@ -166,21 +182,41 @@ class GoogleStreamingSpeechToTextClient(
     override fun getTranscriptFlow(): Flow<StreamingTranscriptResult> = transcriptFlow.asSharedFlow()
 
     override suspend fun restartStream(config: STTStreamConfig): Result<Unit> {
+        if (isShuttingDown.get()) {
+            return Result.failure(STTConnectionException("Client is shutting down"))
+        }
+
         logger.info("Restarting STT streaming session")
-
-        // Stop current stream if active
         stopStreaming()
-
-        // Wait a brief moment before restarting
-        kotlinx.coroutines.delay(1000)
-
-        // Start new stream
+        kotlinx.coroutines.delay(100) // Brief delay
         return startStreaming(config)
     }
 
     override fun isStreamActive(): Boolean {
         val state = streamState.get()
         return state == STTStreamState.CONNECTED || state == STTStreamState.RECEIVING
+    }
+
+    fun setSessionId(sessionId: String) {
+        this.sessionId = sessionId
+    }
+
+    fun setAutoRestartEnabled(enabled: Boolean) {
+        // Kept for compatibility, but no longer used
+        logger.debug("Auto-restart setting ignored in simplified version")
+    }
+
+    // Proper shutdown method
+    suspend fun shutdown() {
+        logger.info("Shutting down STT client for session: $sessionId")
+        isShuttingDown.set(true)
+
+        try {
+            streamingScope?.cancel()
+            stopStreamingInternal()
+        } catch (e: Exception) {
+            logger.error("Error during shutdown", e)
+        }
     }
 
     private suspend fun stopStreamingInternal() {
@@ -226,11 +262,11 @@ class GoogleStreamingSpeechToTextClient(
     }
 
     /**
-     * Observer for handling streaming recognition responses
+     * Simplified observer without complex auto-restart logic
      */
     private inner class StreamingResponseObserver : ResponseObserver<StreamingRecognizeResponse> {
         override fun onStart(controller: StreamController) {
-            logger.debug("STT stream observer started")
+            logger.debug("STT stream observer started for session: $sessionId")
         }
 
         override fun onResponse(response: StreamingRecognizeResponse) {
@@ -239,6 +275,12 @@ class GoogleStreamingSpeechToTextClient(
                     val result = response.getResults(0)
                     processStreamingResult(result)
                 }
+
+                // Signal when user stops speaking
+                if (response.speechEventType == StreamingRecognizeResponse.SpeechEventType.END_OF_SINGLE_UTTERANCE) {
+                    logger.info("Google STT detected END_OF_SINGLE_UTTERANCE for session: $sessionId")
+                    // Let the WebSocket handler decide whether to restart
+                }
             } catch (e: Exception) {
                 logger.error("Error processing streaming response", e)
                 streamState.set(STTStreamState.ERROR)
@@ -246,21 +288,15 @@ class GoogleStreamingSpeechToTextClient(
         }
 
         override fun onError(throwable: Throwable) {
-            logger.error("STT streaming error occurred", throwable)
+            logger.error("STT streaming error occurred for session: $sessionId", throwable)
             streamState.set(STTStreamState.ERROR)
-
-            streamingScope?.launch {
-                val config = currentConfig
-                if (config != null) {
-                    logger.info("Attempting to restart stream after error")
-                    restartStream(config)
-                }
-            }
+            // No auto-restart - let the caller handle this
         }
 
         override fun onComplete() {
-            logger.info("STT streaming completed")
+            logger.info("STT streaming completed for session: $sessionId")
             streamState.set(STTStreamState.DISCONNECTED)
+            // No auto-restart - let the caller handle this
         }
 
         private fun processStreamingResult(result: StreamingRecognitionResult) {
@@ -285,13 +321,15 @@ class GoogleStreamingSpeechToTextClient(
                         )
 
                     logger.debug(
-                        "STT result: '${streamingResult.transcript}' " +
+                        "STT result for session $sessionId: '${streamingResult.transcript}' " +
                             "(confidence: ${String.format("%.2f", streamingResult.confidence)}, " +
                             "final: ${streamingResult.isFinal})",
                     )
 
-                    // Emit the result to the flow
-                    transcriptFlow.tryEmit(streamingResult)
+                    // Use tryEmit to prevent blocking
+                    if (!transcriptFlow.tryEmit(streamingResult)) {
+                        logger.warn("Transcript flow buffer full, dropping oldest results")
+                    }
                 }
             }
         }

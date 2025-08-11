@@ -1,18 +1,21 @@
 package com.sermo.websocket
 
-import com.sermo.exceptions.WebSocketSessionException
 import com.sermo.models.AudioStreamConfig
 import com.sermo.models.Constants.DEFAULT_LANGUAGE_CODE
-import com.sermo.models.StreamingTranscriptResult
 import com.sermo.services.AudioStreamingPipeline
-import com.sermo.services.SessionStateManagerImpl
+import com.sermo.services.ConversationFlowManager
+import com.sermo.session.SessionAwareService
+import com.sermo.session.SessionCoordinator
+import com.sermo.session.SessionCreatedEvent
+import com.sermo.session.SessionEventBus
+import com.sermo.session.SessionTerminatedEvent
+import com.sermo.session.SessionTerminationReason
 import io.ktor.server.websocket.WebSocketServerSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -29,16 +32,18 @@ import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration.Companion.seconds
 
 /**
- * Main WebSocket handler that manages full-duplex communication for conversation sessions
+ * WebSocket handler using centralized session management
  */
 class WebSocketHandler(
     private val connectionManager: ConnectionManager,
     private val messageRouter: MessageRouter,
+    private val sessionCoordinator: SessionCoordinator,
     private val audioStreamingPipeline: AudioStreamingPipeline,
-    private val sessionStateManager: SessionStateManagerImpl,
+    private val conversationFlowManager: ConversationFlowManager,
     private val json: Json,
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
-) {
+    eventBus: SessionEventBus,
+) : SessionAwareService(eventBus, "WebSocketHandler") {
     private val sessionMutex = Mutex()
     private val activeSessions = mutableSetOf<String>()
 
@@ -52,29 +57,39 @@ class WebSocketHandler(
     }
 
     /**
-     * Handles new WebSocket connection and manages the session lifecycle
+     * Handles new WebSocket connection
      */
     suspend fun handleConnection(session: WebSocketServerSession) {
         var sessionId: String? = null
         val sessionActive = AtomicBoolean(true)
 
         try {
-            // Register the session with timeout
+            // Register the connection
             sessionId =
                 withTimeout(5.seconds) {
                     connectionManager.registerSession(session)
                 }
 
-            sessionMutex.withLock {
-                activeSessions.add(sessionId)
+            // Create session through coordinator
+            val sessionResult =
+                sessionCoordinator.createSession(
+                    sessionId = sessionId,
+                    languageCode = DEFAULT_LANGUAGE_CODE,
+                    clientInfo =
+                        mapOf(
+                            "connectionType" to "websocket",
+                            "clientAddress" to (session.call.request.local.remoteHost ?: "unknown"),
+                        ),
+                )
+
+            if (sessionResult.isFailure) {
+                logger.error("Failed to create session: $sessionId", sessionResult.exceptionOrNull())
+                sendErrorMessage(sessionId, "SESSION_CREATION_ERROR", "Failed to initialize session")
+                return
             }
 
-            // Create session state in SessionStateManager
-            val sessionCreationResult = sessionStateManager.createSession(sessionId, DEFAULT_LANGUAGE_CODE)
-            if (sessionCreationResult.isFailure) {
-                logger.error("Failed to create session state for $sessionId", sessionCreationResult.exceptionOrNull())
-                sendErrorMessage(sessionId, "SESSION_STATE_ERROR", "Failed to initialize session state")
-                return
+            sessionMutex.withLock {
+                activeSessions.add(sessionId)
             }
 
             logger.info("WebSocket connection established: $sessionId")
@@ -82,54 +97,48 @@ class WebSocketHandler(
             // Send connection confirmation
             sendConnectionStatus(sessionId, ConnectionStatus.CONNECTED, "Connection established")
 
-            // Set up message routing channels with buffer
+            // Set up message routing channels
             val channels = messageRouter.createChannels()
 
             // Create supervised job for this session
             val sessionJob = SupervisorJob()
             val sessionScope = CoroutineScope(coroutineScope.coroutineContext + sessionJob)
 
-            // Launch coroutines for handling different types of messages
+            // Launch session management coroutines
             sessionScope.launch {
                 try {
                     processAudioMessages(channels.audioChunkChannel.receiveAsFlow(), sessionId, sessionActive)
-                } catch (e: CancellationException) {
-                    logger.debug("Audio processing cancelled for session $sessionId")
-                    throw e
                 } catch (e: Exception) {
                     logger.error("Audio processing failed for session $sessionId", e)
-                    sendErrorMessage(sessionId, "AUDIO_PROCESSING_FATAL", e.message ?: "Audio processing failed")
+                    terminateSession(sessionId, SessionTerminationReason.UNRECOVERABLE_ERROR)
                 }
             }
 
             sessionScope.launch {
                 try {
                     processControlMessages(channels.controlMessageChannel.receiveAsFlow(), sessionId, sessionActive)
-                } catch (e: CancellationException) {
-                    logger.debug("Control processing cancelled for session $sessionId")
-                    throw e
                 } catch (e: Exception) {
                     logger.error("Control processing failed for session $sessionId", e)
-                    sendErrorMessage(sessionId, "CONTROL_PROCESSING_FATAL", e.message ?: "Control processing failed")
+                    terminateSession(sessionId, SessionTerminationReason.UNRECOVERABLE_ERROR)
                 }
             }
 
             sessionScope.launch {
                 try {
                     sendHeartbeat(sessionId, sessionActive)
-                } catch (e: CancellationException) {
-                    logger.debug("Heartbeat cancelled for session $sessionId")
-                    throw e
                 } catch (e: Exception) {
                     logger.error("Heartbeat failed for session $sessionId", e)
                 }
             }
 
             try {
-                // Main message handling loop with timeout
+                // Main message handling loop
                 withTimeout(SESSION_TIMEOUT_MS) {
                     for (frame in session.incoming) {
-                        if (!sessionActive.get()) break
+                        if (!sessionActive.get() || !sessionCoordinator.isSessionActive(sessionId)) {
+                            logger.info("Session $sessionId no longer active, breaking message loop")
+                            break
+                        }
 
                         try {
                             // Validate message size
@@ -139,7 +148,7 @@ class WebSocketHandler(
                                 continue
                             }
 
-                            // Route the incoming message with timeout
+                            // Route the incoming message
                             withTimeout(10.seconds) {
                                 messageRouter.routeMessage(
                                     frame = frame,
@@ -148,9 +157,13 @@ class WebSocketHandler(
                                     controlMessageChannel = channels.controlMessageChannel,
                                 )
                             }
+
+                            // Record activity
+                            sessionCoordinator.recordActivity(sessionId)
                         } catch (e: TimeoutCancellationException) {
                             logger.error("Message routing timeout for session $sessionId", e)
-                            sendErrorMessage(sessionId, "MESSAGE_TIMEOUT", "Message processing timeout")
+                            terminateSession(sessionId, SessionTerminationReason.UNRECOVERABLE_ERROR)
+                            break
                         } catch (e: Exception) {
                             logger.error("Error processing frame for session $sessionId", e)
                             sendErrorMessage(sessionId, "MESSAGE_PROCESSING_ERROR", e.message ?: "Unknown error")
@@ -159,50 +172,56 @@ class WebSocketHandler(
                 }
             } catch (_: ClosedReceiveChannelException) {
                 logger.info("WebSocket connection closed for session $sessionId")
+                terminateSession(sessionId, SessionTerminationReason.CLIENT_DISCONNECT)
             } catch (_: TimeoutCancellationException) {
                 logger.warn("Session timeout for $sessionId")
-                sendErrorMessage(sessionId, "SESSION_TIMEOUT", "Session exceeded maximum duration")
+                terminateSession(sessionId, SessionTerminationReason.TIMEOUT)
             } finally {
                 // Mark session as inactive
                 sessionActive.set(false)
 
                 // Cancel all session jobs
-                sessionJob.cancelAndJoin()
+                sessionJob.cancel()
 
                 // Close channels
                 channels.audioChunkChannel.close()
                 channels.controlMessageChannel.close()
-
-                logger.debug("Session cleanup completed for $sessionId")
-            }
-        } catch (e: TimeoutCancellationException) {
-            logger.error("Session registration timeout for $sessionId", e)
-            sessionId?.let {
-                sendErrorMessage(it, "REGISTRATION_TIMEOUT", "Session registration timeout")
             }
         } catch (e: Exception) {
             logger.error("Error handling WebSocket connection for session $sessionId", e)
-            sessionId?.let {
-                sendErrorMessage(it, "CONNECTION_ERROR", e.message ?: "Connection error")
-            }
+            sessionId?.let { terminateSession(it, SessionTerminationReason.UNRECOVERABLE_ERROR) }
         } finally {
-            // Unregister session
+            // Cleanup local session tracking
             sessionId?.let { id ->
                 try {
                     sessionMutex.withLock {
                         activeSessions.remove(id)
                     }
-                    connectionManager.unregisterSession(id)
                     logger.info("WebSocket session cleanup completed: $id")
                 } catch (e: Exception) {
-                    logger.error("Error during session cleanup for $id", e)
+                    logger.error("Error during local session cleanup for $id", e)
                 }
             }
         }
     }
 
     /**
-     * Processes incoming audio chunk messages with proper error handling
+     * Terminate session using coordinator
+     */
+    private suspend fun terminateSession(
+        sessionId: String,
+        reason: SessionTerminationReason,
+    ) {
+        logger.info("Terminating session $sessionId with reason: $reason")
+        try {
+            sessionCoordinator.terminateSession(sessionId, reason)
+        } catch (e: Exception) {
+            logger.error("Failed to terminate session $sessionId", e)
+        }
+    }
+
+    /**
+     * Process audio messages
      */
     private suspend fun processAudioMessages(
         audioFlow: Flow<AudioChunkData>,
@@ -210,10 +229,13 @@ class WebSocketHandler(
         sessionActive: AtomicBoolean,
     ) {
         var pipelineInitialized = false
-        var transcriptRelayStarted = false
 
         audioFlow.collect { audioChunk ->
-            if (!sessionActive.get()) return@collect
+            // Double-check session is still active
+            if (!sessionActive.get() || !sessionCoordinator.isSessionActive(sessionId)) {
+                logger.debug("Session $sessionId no longer active, stopping audio processing")
+                return@collect
+            }
 
             try {
                 // Validate audio chunk
@@ -233,64 +255,75 @@ class WebSocketHandler(
                         "seq=${audioChunk.sequenceNumber}",
                 )
 
-                // Initialize audio streaming pipeline on first chunk
+                // Initialize services on first chunk
                 if (!pipelineInitialized) {
-                    val audioConfig =
-                        AudioStreamConfig(
-                            sampleRateHertz = DEFAULT_SAMPLE_RATE_HZ,
-                            chunkSizeBytes = audioChunk.audioData.size,
-                            bufferSizeMs = DEFAULT_BUFFER_SIZE_MS,
-                        )
-
-                    val startResult = audioStreamingPipeline.startStreaming(audioConfig)
-                    if (startResult.isFailure) {
-                        logger.error("Failed to start audio streaming pipeline for session $sessionId", startResult.exceptionOrNull())
-                        sendErrorMessage(sessionId, "PIPELINE_START_ERROR", "Failed to initialize audio processing")
+                    val initResult = initializeStreamingServices(sessionId, audioChunk)
+                    if (initResult.isFailure) {
+                        logger.error("Failed to initialize streaming services for session $sessionId", initResult.exceptionOrNull())
+                        terminateSession(sessionId, SessionTerminationReason.UNRECOVERABLE_ERROR)
                         return@collect
                     }
-
                     pipelineInitialized = true
-                    logger.info("Audio streaming pipeline initialized for session $sessionId")
-
-                    // Start transcript relay for this session
-                    startTranscriptRelay(sessionId, sessionActive)
-                    transcriptRelayStarted = true
                 }
 
                 // Forward audio chunk to streaming pipeline
-                val processResult = audioStreamingPipeline.processAudioChunk(audioChunk.audioData)
+                val processResult = audioStreamingPipeline.processAudioChunk(sessionId, audioChunk.audioData)
                 if (processResult.isFailure) {
                     logger.warn(
                         "Failed to process audio chunk ${audioChunk.sequenceNumber} for session $sessionId",
                         processResult.exceptionOrNull(),
                     )
-                    // Continue processing other chunks - don't break the flow for single chunk failures
                 } else {
                     logger.debug("Audio chunk processed successfully: ${audioChunk.sequenceNumber}")
                 }
             } catch (e: Exception) {
                 logger.error("Error processing audio chunk ${audioChunk.sequenceNumber} for session $sessionId", e)
-                // Don't rethrow - continue processing other chunks
+                // Don't terminate for individual chunk failures
             }
         }
 
-        // Stop the audio streaming pipeline when audio flow ends
-        if (pipelineInitialized) {
-            try {
-                val stopResult = audioStreamingPipeline.stopStreaming()
-                if (stopResult.isFailure) {
-                    logger.warn("Failed to stop audio streaming pipeline for session $sessionId", stopResult.exceptionOrNull())
-                } else {
-                    logger.info("Audio streaming pipeline stopped for session $sessionId")
-                }
-            } catch (e: Exception) {
-                logger.error("Error stopping audio streaming pipeline for session $sessionId", e)
+        logger.debug("Audio processing completed for session $sessionId")
+    }
+
+    /**
+     * Initialize streaming services
+     */
+    private suspend fun initializeStreamingServices(
+        sessionId: String,
+        firstAudioChunk: AudioChunkData,
+    ): Result<Unit> {
+        try {
+            logger.info("Initializing streaming services for session $sessionId")
+
+            // 1. Initialize audio streaming pipeline
+            val audioConfig =
+                AudioStreamConfig(
+                    sampleRateHertz = DEFAULT_SAMPLE_RATE_HZ,
+                    chunkSizeBytes = firstAudioChunk.audioData.size,
+                    bufferSizeMs = DEFAULT_BUFFER_SIZE_MS,
+                )
+
+            val pipelineResult = audioStreamingPipeline.startStreaming(sessionId, audioConfig)
+            if (pipelineResult.isFailure) {
+                return Result.failure(Exception("Failed to start audio streaming pipeline", pipelineResult.exceptionOrNull()))
             }
+
+            // 2. Start conversation flow manager
+            val conversationResult = conversationFlowManager.startConversationFlow(sessionId, DEFAULT_LANGUAGE_CODE)
+            if (conversationResult.isFailure) {
+                return Result.failure(Exception("Failed to start conversation flow", conversationResult.exceptionOrNull()))
+            }
+
+            logger.info("All streaming services initialized successfully for session $sessionId")
+            return Result.success(Unit)
+        } catch (e: Exception) {
+            logger.error("Failed to initialize streaming services for session $sessionId", e)
+            return Result.failure(e)
         }
     }
 
     /**
-     * Processes incoming control messages with enhanced validation
+     * Process control messages
      */
     private suspend fun processControlMessages(
         controlFlow: Flow<ControlMessage>,
@@ -298,7 +331,11 @@ class WebSocketHandler(
         sessionActive: AtomicBoolean,
     ) {
         controlFlow.collect { controlMessage ->
-            if (!sessionActive.get()) return@collect
+            // Double-check session is still active
+            if (!sessionActive.get() || !sessionCoordinator.isSessionActive(sessionId)) {
+                logger.debug("Session $sessionId no longer active, stopping control processing")
+                return@collect
+            }
 
             try {
                 // Validate control message
@@ -342,27 +379,17 @@ class WebSocketHandler(
                 }
             } catch (e: Exception) {
                 logger.error("Error processing control message for session $sessionId", e)
-                // Don't rethrow - continue processing other messages
             }
         }
     }
 
     /**
-     * Handles conversation state change messages
+     * Handle conversation state change messages
      */
     private suspend fun handleConversationStateMessage(message: ControlMessage) {
         logger.debug("Handling conversation state change for session ${message.sessionId}")
 
         try {
-            // TODO: Implement conversation state management
-            // This will be integrated with conversation flow management in later tasks
-            // Consider adding:
-            // - State validation
-            // - State transition rules
-            // - Persistence of state changes
-            // - Broadcasting state changes to relevant sessions
-
-            // Acknowledge state change
             sendConnectionStatus(
                 message.sessionId,
                 ConnectionStatus.CONNECTED,
@@ -379,7 +406,7 @@ class WebSocketHandler(
     }
 
     /**
-     * Handles connection status messages with session lifecycle management
+     * Handle connection status messages
      */
     private suspend fun handleConnectionStatusMessage(
         message: ControlMessage,
@@ -393,17 +420,15 @@ class WebSocketHandler(
                     ConnectionStatus.DISCONNECTED -> {
                         logger.info("Client requested disconnect for session ${message.sessionId}")
                         sessionActive.set(false)
-                        sessionMutex.withLock {
-                            activeSessions.remove(message.sessionId)
-                        }
-                        connectionManager.unregisterSession(message.sessionId)
+                        terminateSession(message.sessionId, SessionTerminationReason.CLIENT_DISCONNECT)
                     }
                     ConnectionStatus.RECONNECTING -> {
                         logger.info("Client is reconnecting for session ${message.sessionId}")
-                        // TODO: Handle reconnection logic
-                        // - Validate reconnection token
-                        // - Restore session state
-                        // - Update connection mapping
+                        sendConnectionStatus(
+                            message.sessionId,
+                            ConnectionStatus.CONNECTED,
+                            "Reconnection acknowledged",
+                        )
                     }
                     ConnectionStatus.CONNECTED -> {
                         logger.debug("Connection status confirmed for session ${message.sessionId}")
@@ -421,29 +446,17 @@ class WebSocketHandler(
             }
         } catch (e: Exception) {
             logger.error("Failed to handle connection status for session ${message.sessionId}", e)
-            sendErrorMessage(
-                message.sessionId,
-                "STATUS_HANDLING_ERROR",
-                "Failed to process status update",
-            )
+            terminateSession(message.sessionId, SessionTerminationReason.UNRECOVERABLE_ERROR)
         }
     }
 
     /**
-     * Handles error messages from client with improved logging
+     * Handle error messages from client
      */
     private suspend fun handleErrorMessage(message: ControlMessage) {
         logger.warn("Client reported error for session ${message.sessionId}: ${message.rawData}")
 
         try {
-            // TODO: Implement client error handling and recovery
-            // Consider adding:
-            // - Error categorization
-            // - Automatic recovery attempts
-            // - Error metrics collection
-            // - Client-side error acknowledgment
-
-            // For now, just acknowledge the error
             sendConnectionStatus(
                 message.sessionId,
                 ConnectionStatus.CONNECTED,
@@ -455,66 +468,23 @@ class WebSocketHandler(
     }
 
     /**
-     * Sends connection status message to client with retry logic
-     */
-    private suspend fun sendConnectionStatus(
-        sessionId: String,
-        status: ConnectionStatus,
-        message: String? = null,
-    ) {
-        try {
-            val statusMessage =
-                ConnectionStatusMessage(
-                    status = status,
-                    message = message,
-                )
-            val jsonMessage = json.encodeToString(statusMessage)
-            connectionManager.sendToSession(sessionId, jsonMessage)
-            logger.debug("Sent connection status to session $sessionId: $status")
-        } catch (e: Exception) {
-            logger.error("Failed to send connection status to session $sessionId", e)
-            // Don't rethrow - this is a notification failure, not a critical error
-        }
-    }
-
-    /**
-     * Sends error message to client with structured error format
-     */
-    private suspend fun sendErrorMessage(
-        sessionId: String,
-        errorCode: String,
-        errorMessage: String,
-        details: String? = null,
-    ) {
-        try {
-            val error =
-                ErrorMessage(
-                    errorCode = errorCode,
-                    errorMessage = errorMessage,
-                    details = details,
-                    timestamp = System.currentTimeMillis(),
-                )
-            val jsonMessage = json.encodeToString(error)
-            connectionManager.sendToSession(sessionId, jsonMessage)
-            logger.debug("Sent error message to session $sessionId: $errorCode")
-        } catch (e: Exception) {
-            logger.error("Failed to send error message to session $sessionId", e)
-            // Don't rethrow - error reporting failure shouldn't crash the session
-        }
-    }
-
-    /**
-     * Sends periodic heartbeat to maintain connection with better lifecycle management
+     * Send heartbeat
      */
     private suspend fun sendHeartbeat(
         sessionId: String,
         sessionActive: AtomicBoolean,
     ) {
         try {
-            while (sessionActive.get() && connectionManager.isSessionActive(sessionId)) {
+            while (sessionActive.get() &&
+                connectionManager.isSessionActive(sessionId) &&
+                sessionCoordinator.isSessionActive(sessionId)
+            ) {
                 delay(HEARTBEAT_INTERVAL_MS)
 
-                if (sessionActive.get() && connectionManager.isSessionActive(sessionId)) {
+                if (sessionActive.get() &&
+                    connectionManager.isSessionActive(sessionId) &&
+                    sessionCoordinator.isSessionActive(sessionId)
+                ) {
                     val heartbeat =
                         ConnectionStatusMessage(
                             status = ConnectionStatus.CONNECTED,
@@ -536,21 +506,35 @@ class WebSocketHandler(
         }
     }
 
-    /**
-     * Sends transcript message to client with validation
-     */
+    // Session event handlers
+    override suspend fun onSessionCreated(event: SessionCreatedEvent): Result<Unit> {
+        logger.debug("Session created: ${event.sessionId}")
+        return Result.success(Unit)
+    }
+
+    override suspend fun onSessionTerminated(event: SessionTerminatedEvent): Result<Unit> {
+        return try {
+            logger.info("Cleaning up WebSocket resources for session: ${event.sessionId}")
+
+            // Unregister from connection manager
+            connectionManager.unregisterSession(event.sessionId)
+
+            logger.debug("WebSocket cleanup completed for session: ${event.sessionId}")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            logger.error("Failed to cleanup WebSocket resources for session ${event.sessionId}", e)
+            Result.failure(e)
+        }
+    }
+
+    // Public methods for sending messages via WebSocket
     suspend fun sendPartialTranscript(
         sessionId: String,
         transcript: String,
         confidence: Float,
     ) {
-        if (!isValidConfidence(confidence)) {
-            logger.warn("Invalid confidence value for session $sessionId: $confidence")
-            return
-        }
-
-        if (transcript.isBlank()) {
-            logger.warn("Empty transcript for session $sessionId")
+        if (!sessionCoordinator.isSessionActive(sessionId)) {
+            logger.debug("Session $sessionId not active, skipping partial transcript")
             return
         }
 
@@ -566,29 +550,18 @@ class WebSocketHandler(
             logger.debug("Sent partial transcript to session $sessionId")
         } catch (e: Exception) {
             logger.error("Failed to send partial transcript to session $sessionId", e)
-            throw WebSocketSessionException("Failed to send partial transcript", e)
         }
     }
 
-    /**
-     * Sends final transcript message to client with validation
-     */
     suspend fun sendFinalTranscript(
         sessionId: String,
         transcript: String,
         confidence: Float,
         languageCode: String,
     ) {
-        if (!isValidConfidence(confidence)) {
-            throw WebSocketSessionException("Invalid confidence value: $confidence")
-        }
-
-        if (transcript.isBlank()) {
-            throw WebSocketSessionException("Empty transcript")
-        }
-
-        if (languageCode.isBlank()) {
-            throw WebSocketSessionException("Empty language code")
+        if (!sessionCoordinator.isSessionActive(sessionId)) {
+            logger.debug("Session $sessionId not active, skipping final transcript")
+            return
         }
 
         try {
@@ -604,24 +577,16 @@ class WebSocketHandler(
             logger.debug("Sent final transcript to session $sessionId")
         } catch (e: Exception) {
             logger.error("Failed to send final transcript to session $sessionId", e)
-            throw WebSocketSessionException("Failed to send final transcript", e)
         }
     }
 
-    /**
-     * Sends TTS audio data to client with size validation
-     */
     suspend fun sendTTSAudio(
         sessionId: String,
         audioData: ByteArray,
     ) {
-        if (audioData.isEmpty()) {
-            logger.warn("Empty audio data for session $sessionId")
+        if (!sessionCoordinator.isSessionActive(sessionId)) {
+            logger.debug("Session $sessionId not active, skipping TTS audio")
             return
-        }
-
-        if (audioData.size > MAX_MESSAGE_SIZE) {
-            throw WebSocketSessionException("Audio data too large: ${audioData.size} bytes")
         }
 
         try {
@@ -629,17 +594,18 @@ class WebSocketHandler(
             logger.debug("Sent TTS audio to session $sessionId, size: ${audioData.size} bytes")
         } catch (e: Exception) {
             logger.error("Failed to send TTS audio to session $sessionId", e)
-            throw WebSocketSessionException("Failed to send TTS audio", e)
         }
     }
 
-    /**
-     * Sends conversation state update to client with validation
-     */
     suspend fun sendConversationState(
         sessionId: String,
         state: ConversationState,
     ) {
+        if (!sessionCoordinator.isSessionActive(sessionId)) {
+            logger.debug("Session $sessionId not active, skipping conversation state")
+            return
+        }
+
         try {
             val stateMessage =
                 ConversationStateMessage(
@@ -652,141 +618,48 @@ class WebSocketHandler(
             logger.debug("Sent conversation state to session $sessionId: $state")
         } catch (e: Exception) {
             logger.error("Failed to send conversation state to session $sessionId", e)
-            throw WebSocketSessionException("Failed to send conversation state", e)
         }
     }
 
-    /**
-     * Starts transcript relay for a specific session
-     */
-    private fun startTranscriptRelay(
+    // Utility methods
+    private suspend fun sendConnectionStatus(
         sessionId: String,
-        sessionActive: AtomicBoolean,
-    ) {
-        coroutineScope.launch {
-            try {
-                logger.debug("Starting transcript relay for session $sessionId")
-
-                // Subscribe to STT transcript flow from the audio streaming pipeline
-                // Note: This assumes the AudioStreamingPipeline has access to the STT client
-                // and can provide access to the transcript flow
-
-                // For now, we'll get the STT client through the pipeline
-                // This is a simplified approach until we implement proper dependency injection
-
-                // TODO: Get the StreamingSpeechToText client and subscribe to its transcript flow
-                // val sttClient = audioStreamingPipeline.getStreamingSpeechToTextClient()
-                // sttClient.getTranscriptFlow()
-                //     .catch { exception ->
-                //         logger.error("Error in transcript flow for session $sessionId", exception)
-                //     }
-                //     .collect { transcriptResult ->
-                //         if (sessionActive.get()) {
-                //             relayTranscriptToSession(sessionId, transcriptResult)
-                //         }
-                //     }
-
-                logger.info("Transcript relay started for session $sessionId")
-            } catch (e: Exception) {
-                logger.error("Failed to start transcript relay for session $sessionId", e)
-            }
-        }
-    }
-
-    /**
-     * Relays a transcript result to a specific session
-     */
-    private suspend fun relayTranscriptToSession(
-        sessionId: String,
-        result: StreamingTranscriptResult,
+        status: ConnectionStatus,
+        message: String? = null,
     ) {
         try {
-            // Validate transcript result
-            if (!isValidTranscriptResult(result)) {
-                logger.debug("Skipping invalid transcript result for session $sessionId: $result")
-                return
-            }
-
-            logger.debug(
-                "Relaying transcript result to session $sessionId: '${result.transcript}' " +
-                    "(confidence: ${String.format("%.2f", result.confidence)}, " +
-                    "final: ${result.isFinal}, language: ${result.languageCode})",
-            )
-
-            if (result.isFinal) {
-                // Send final transcript
-                sendFinalTranscript(
-                    sessionId = sessionId,
-                    transcript = result.transcript,
-                    confidence = result.confidence,
-                    languageCode = result.languageCode,
-                )
-
-                logger.debug("Sent final transcript to session $sessionId: '${result.transcript}'")
-            } else {
-                // Send partial transcript
-                sendPartialTranscript(
-                    sessionId = sessionId,
-                    transcript = result.transcript,
-                    confidence = result.confidence,
-                )
-
-                logger.debug("Sent partial transcript to session $sessionId: '${result.transcript}'")
-            }
+            val statusMessage = ConnectionStatusMessage(status = status, message = message)
+            val jsonMessage = json.encodeToString(statusMessage)
+            connectionManager.sendToSession(sessionId, jsonMessage)
+            logger.debug("Sent connection status to session $sessionId: $status")
         } catch (e: Exception) {
-            logger.error("Failed to relay transcript to session $sessionId", e)
+            logger.error("Failed to send connection status to session $sessionId", e)
         }
     }
 
-    /**
-     * Validates a transcript result before relaying
-     */
-    private fun isValidTranscriptResult(result: StreamingTranscriptResult): Boolean {
-        // Check confidence threshold
-        val minConfidenceThreshold = 0.1f
-        if (result.confidence < minConfidenceThreshold) {
-            logger.debug("Transcript confidence too low: ${result.confidence}")
-            return false
+    private suspend fun sendErrorMessage(
+        sessionId: String,
+        errorCode: String,
+        errorMessage: String,
+        details: String? = null,
+    ) {
+        try {
+            val error =
+                ErrorMessage(
+                    errorCode = errorCode,
+                    errorMessage = errorMessage,
+                    details = details,
+                    timestamp = System.currentTimeMillis(),
+                )
+            val jsonMessage = json.encodeToString(error)
+            connectionManager.sendToSession(sessionId, jsonMessage)
+            logger.debug("Sent error message to session $sessionId: $errorCode")
+        } catch (e: Exception) {
+            logger.error("Failed to send error message to session $sessionId", e)
         }
-
-        // Check transcript length
-        val trimmedTranscript = result.transcript.trim()
-        if (trimmedTranscript.length < 1) {
-            logger.debug("Transcript too short: '$trimmedTranscript'")
-            return false
-        }
-
-        if (trimmedTranscript.length > 5000) {
-            logger.debug("Transcript too long: ${trimmedTranscript.length} characters")
-            return false
-        }
-
-        // Check for empty or whitespace-only transcripts
-        if (trimmedTranscript.isBlank()) {
-            logger.debug("Transcript is blank")
-            return false
-        }
-
-        // Check language code
-        if (result.languageCode.isBlank()) {
-            logger.debug("Missing language code")
-            return false
-        }
-
-        return true
     }
 
-    /**
-     * Utility function to validate confidence values
-     */
-    private fun isValidConfidence(confidence: Float): Boolean {
-        return confidence in 0.0f..1.0f && !confidence.isNaN()
-    }
-
-    /**
-     * Gracefully shutdown the handler
-     */
-    suspend fun shutdown() {
+    override suspend fun shutdown() {
         logger.info("Shutting down WebSocket handler...")
 
         sessionMutex.withLock {

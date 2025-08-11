@@ -6,11 +6,16 @@ import com.sermo.plugins.configureMonitoring
 import com.sermo.plugins.configureRouting
 import com.sermo.plugins.configureSerialization
 import com.sermo.plugins.configureWebSockets
+import com.sermo.session.SessionCoordinator
+import com.sermo.session.SessionEventBus
+import com.sermo.websocket.WebSocketEventRelay
 import io.ktor.server.application.Application
 import io.ktor.server.application.ApplicationStopped
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
+import kotlinx.coroutines.runBlocking
 import org.koin.core.context.stopKoin
+import org.koin.ktor.ext.inject
 import org.slf4j.LoggerFactory
 
 fun main() {
@@ -36,8 +41,25 @@ fun Application.module() {
     configureRouting()
 
     environment.monitor.subscribe(ApplicationStopped) {
-        logger.info("Application stopping - cleaning up all Koin resources...")
-        stopKoin()
-        logger.info("Koin stopped - all resources cleaned up")
+        logger.info("Application stopping - cleaning up session management and Koin resources...")
+
+        try {
+            val webSocketEventRelay by inject<WebSocketEventRelay>()
+            val sessionCoordinator by inject<SessionCoordinator>()
+            val eventBus by inject<SessionEventBus>()
+
+            runBlocking {
+                webSocketEventRelay.shutdown()
+                sessionCoordinator.shutdown()
+                eventBus.shutdown()
+            }
+
+            logger.info("Session management cleanup completed")
+        } catch (e: Exception) {
+            logger.error("Error during session management cleanup", e)
+        } finally {
+            stopKoin()
+            logger.info("Koin stopped - all resources cleaned up")
+        }
     }
 }

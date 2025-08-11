@@ -12,10 +12,7 @@ COPY --from=models /app/models.jar /app/libs/models.jar
 # Copy backend source
 COPY . .
 
-# Build backend
-CMD ["bash"]
-
-# RUN gradle build --no-daemon
+RUN gradle build --no-daemon
 
 # Stage 3: Runtime
 FROM eclipse-temurin:21-jre
