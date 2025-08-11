@@ -56,20 +56,6 @@ data class TTSAudioChunk(
 }
 
 /**
- * TTS streaming session information
- */
-data class TTSStreamingSession(
-    val sessionId: String,
-    val languageCode: String,
-    val voiceId: String? = null,
-    val streamConfig: TTSStreamConfig,
-    val startTime: Long = System.currentTimeMillis(),
-    var isActive: Boolean = true,
-    var totalChunksSent: Long = 0L,
-    var totalBytesSent: Long = 0L,
-)
-
-/**
  * State of TTS streaming operation
  */
 enum class TTSStreamingState {
@@ -124,22 +110,5 @@ data class TTSStreamingMetrics(
                 generationLatency = 0.milliseconds,
                 streamingLatency = 0.milliseconds,
             )
-    }
-}
-
-/**
- * Configuration for TTS audio chunking
- */
-data class TTSChunkingConfig(
-    val targetChunkDurationMs: Long = DEFAULT_CHUNK_DURATION_MS,
-    val maxChunkSizeBytes: Int = TTSStreamConfig.MAX_CHUNK_SIZE_BYTES,
-    val overlapMs: Long = 0L, // No overlap by default
-    val fadeInMs: Long = 0L, // No fade effects by default
-    val fadeOutMs: Long = 0L,
-) {
-    companion object {
-        const val DEFAULT_CHUNK_DURATION_MS = 250L // 250ms chunks for smooth playback
-        const val MIN_CHUNK_DURATION_MS = 100L
-        const val MAX_CHUNK_DURATION_MS = 1000L
     }
 }

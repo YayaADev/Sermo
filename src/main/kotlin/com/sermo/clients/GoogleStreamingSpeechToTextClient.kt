@@ -46,14 +46,13 @@ class GoogleStreamingSpeechToTextClient(
 ) : StreamingSpeechToText {
     companion object {
         private val logger = LoggerFactory.getLogger(GoogleStreamingSpeechToTextClient::class.java)
-        private val STREAM_TIMEOUT_DURATION = 5.minutes
         private val CONNECTION_TIMEOUT_DURATION = 30.seconds
         private const val AUDIO_CHUNK_MAX_SIZE = 65536
     }
 
     private val streamState = AtomicReference(STTStreamState.DISCONNECTED)
 
-    // Fixed: Limited buffer to prevent memory accumulation
+    // Limited buffer to prevent memory accumulation
     private val transcriptFlow =
         MutableSharedFlow<StreamingTranscriptResult>(
             replay = 0,
@@ -201,11 +200,6 @@ class GoogleStreamingSpeechToTextClient(
         this.sessionId = sessionId
     }
 
-    fun setAutoRestartEnabled(enabled: Boolean) {
-        // Kept for compatibility, but no longer used
-        logger.debug("Auto-restart setting ignored in simplified version")
-    }
-
     // Proper shutdown method
     suspend fun shutdown() {
         logger.info("Shutting down STT client for session: $sessionId")
@@ -219,7 +213,7 @@ class GoogleStreamingSpeechToTextClient(
         }
     }
 
-    private suspend fun stopStreamingInternal() {
+    private fun stopStreamingInternal() {
         logger.debug("Stopping streaming internal resources")
 
         try {

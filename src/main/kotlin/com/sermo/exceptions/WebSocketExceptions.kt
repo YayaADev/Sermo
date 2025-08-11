@@ -24,8 +24,3 @@ class WebSocketMessageParsingException(message: String, cause: Throwable? = null
  * Exception thrown when WebSocket session management fails
  */
 class WebSocketSessionException(message: String, cause: Throwable? = null) : WebSocketException(message, cause)
-
-/**
- * Exception thrown when WebSocket frame type is invalid or unsupported
- */
-class WebSocketFrameTypeException(message: String, cause: Throwable? = null) : WebSocketException(message, cause)

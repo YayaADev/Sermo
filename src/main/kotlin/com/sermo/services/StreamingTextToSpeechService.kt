@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
- * COMPLETE TTS service implementation with session event management
+ *  TTS service implementation with session event management
  */
 class StreamingTextToSpeechService(
     private val textToSpeechClient: TextToSpeechClient,
