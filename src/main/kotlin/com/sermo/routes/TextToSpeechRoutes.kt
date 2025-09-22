@@ -2,6 +2,7 @@ package com.sermo.routes
 
 import com.sermo.exceptions.ValidationException
 import com.sermo.models.ApiError
+import com.sermo.models.Constants.DEFAULT_LANGUAGE_CODE
 import com.sermo.models.ErrorResponse
 import com.sermo.models.SynthesisRequest
 import com.sermo.services.TextToSpeechService
@@ -29,7 +30,7 @@ fun Route.textToSpeechRoutes() {
                 val result =
                     textToSpeechService.synthesizeText(
                         text = request.text,
-                        language = request.language,
+                        language = request.language ?: DEFAULT_LANGUAGE_CODE,
                         voice = request.voice,
                         speed = request.speed ?: 1.0,
                         pitch = request.pitch ?: 0.0,

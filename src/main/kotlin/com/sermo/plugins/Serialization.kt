@@ -8,7 +8,6 @@ import kotlinx.serialization.json.Json
 import org.koin.ktor.ext.inject
 
 fun Application.configureSerialization() {
-    // Retrieve Json instance from Koin
     val json: Json by inject()
 
     install(ContentNegotiation) {

@@ -11,7 +11,6 @@ val webSocketModule =
         single<ConnectionManager> { ConnectionManager() }
         single<MessageRouter> { MessageRouter(get()) }
 
-        // UPDATED: WebSocket handler with new session management (no old SessionLifecycleManager)
         single<WebSocketHandler> {
             WebSocketHandler(
                 connectionManager = get(),

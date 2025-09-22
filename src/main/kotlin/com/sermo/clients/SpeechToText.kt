@@ -3,6 +3,9 @@ package com.sermo.clients
 import com.sermo.models.Constants.DEFAULT_LANGUAGE_CODE
 import com.sermo.models.TranscriptionResponse
 
+/**
+ * Transcribes the voice audio from the user to the input language
+ */
 interface SpeechToText {
     suspend fun transcribe(
         audioBytes: ByteArray,

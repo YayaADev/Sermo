@@ -34,13 +34,8 @@ import kotlinx.coroutines.withTimeout
 import org.slf4j.LoggerFactory
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
-import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
-/**
- * Google Cloud Speech-to-Text streaming client with built-in turn detection
- * Simplified version without complex auto-restart logic
- */
 class GoogleStreamingSpeechToTextClient(
     private val speechClient: SpeechClient,
 ) : StreamingSpeechToText {

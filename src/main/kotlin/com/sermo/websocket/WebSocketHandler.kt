@@ -43,7 +43,7 @@ class WebSocketHandler(
     private val json: Json,
     private val coroutineScope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
     eventBus: SessionEventBus,
-) : SessionAwareService(eventBus, "WebSocketHandler") {
+) : SessionAwareService(eventBus, "WebSocketHandlerV2") {
     private val sessionMutex = Mutex()
     private val activeSessions = mutableSetOf<String>()
 
@@ -56,9 +56,6 @@ class WebSocketHandler(
         private const val DEFAULT_BUFFER_SIZE_MS = 100
     }
 
-    /**
-     * Handles new WebSocket connection
-     */
     suspend fun handleConnection(session: WebSocketServerSession) {
         var sessionId: String? = null
         val sessionActive = AtomicBoolean(true)
@@ -70,29 +67,30 @@ class WebSocketHandler(
                     connectionManager.registerSession(session)
                 }
 
-            // Create session through coordinator
-            val sessionResult =
+            // Create session through coordinator - this creates the context automatically
+            val contextResult =
                 sessionCoordinator.createSession(
                     sessionId = sessionId,
                     languageCode = DEFAULT_LANGUAGE_CODE,
                     clientInfo =
                         mapOf(
                             "connectionType" to "websocket",
-                            "clientAddress" to (session.call.request.local.remoteHost ?: "unknown"),
+                            "clientAddress" to session.call.request.local.remoteHost,
                         ),
                 )
 
-            if (sessionResult.isFailure) {
-                logger.error("Failed to create session: $sessionId", sessionResult.exceptionOrNull())
+            if (contextResult.isFailure) {
+                logger.error("Failed to create session context: $sessionId", contextResult.exceptionOrNull())
                 sendErrorMessage(sessionId, "SESSION_CREATION_ERROR", "Failed to initialize session")
                 return
             }
 
+            val context = contextResult.getOrThrow()
+            logger.info("WebSocket connection established with context: $sessionId")
+
             sessionMutex.withLock {
                 activeSessions.add(sessionId)
             }
-
-            logger.info("WebSocket connection established: $sessionId")
 
             // Send connection confirmation
             sendConnectionStatus(sessionId, ConnectionStatus.CONNECTED, "Connection established")
@@ -206,86 +204,6 @@ class WebSocketHandler(
     }
 
     /**
-     * Terminate session using coordinator
-     */
-    private suspend fun terminateSession(
-        sessionId: String,
-        reason: SessionTerminationReason,
-    ) {
-        logger.info("Terminating session $sessionId with reason: $reason")
-        try {
-            sessionCoordinator.terminateSession(sessionId, reason)
-        } catch (e: Exception) {
-            logger.error("Failed to terminate session $sessionId", e)
-        }
-    }
-
-    /**
-     * Process audio messages
-     */
-    private suspend fun processAudioMessages(
-        audioFlow: Flow<AudioChunkData>,
-        sessionId: String,
-        sessionActive: AtomicBoolean,
-    ) {
-        var pipelineInitialized = false
-
-        audioFlow.collect { audioChunk ->
-            // Double-check session is still active
-            if (!sessionActive.get() || !sessionCoordinator.isSessionActive(sessionId)) {
-                logger.debug("Session $sessionId no longer active, stopping audio processing")
-                return@collect
-            }
-
-            try {
-                // Validate audio chunk
-                if (audioChunk.sessionId != sessionId) {
-                    logger.warn("Session ID mismatch in audio chunk: expected $sessionId, got ${audioChunk.sessionId}")
-                    return@collect
-                }
-
-                if (audioChunk.audioData.isEmpty()) {
-                    logger.warn("Empty audio data received for session $sessionId")
-                    return@collect
-                }
-
-                logger.debug(
-                    "Processing audio chunk: session=${audioChunk.sessionId}, " +
-                        "size=${audioChunk.audioData.size}, " +
-                        "seq=${audioChunk.sequenceNumber}",
-                )
-
-                // Initialize services on first chunk
-                if (!pipelineInitialized) {
-                    val initResult = initializeStreamingServices(sessionId, audioChunk)
-                    if (initResult.isFailure) {
-                        logger.error("Failed to initialize streaming services for session $sessionId", initResult.exceptionOrNull())
-                        terminateSession(sessionId, SessionTerminationReason.UNRECOVERABLE_ERROR)
-                        return@collect
-                    }
-                    pipelineInitialized = true
-                }
-
-                // Forward audio chunk to streaming pipeline
-                val processResult = audioStreamingPipeline.processAudioChunk(sessionId, audioChunk.audioData)
-                if (processResult.isFailure) {
-                    logger.warn(
-                        "Failed to process audio chunk ${audioChunk.sequenceNumber} for session $sessionId",
-                        processResult.exceptionOrNull(),
-                    )
-                } else {
-                    logger.debug("Audio chunk processed successfully: ${audioChunk.sequenceNumber}")
-                }
-            } catch (e: Exception) {
-                logger.error("Error processing audio chunk ${audioChunk.sequenceNumber} for session $sessionId", e)
-                // Don't terminate for individual chunk failures
-            }
-        }
-
-        logger.debug("Audio processing completed for session $sessionId")
-    }
-
-    /**
      * Initialize streaming services
      */
     private suspend fun initializeStreamingServices(
@@ -323,7 +241,68 @@ class WebSocketHandler(
     }
 
     /**
-     * Process control messages
+     * Process audio messages - simplified with context management
+     */
+    private suspend fun processAudioMessages(
+        audioFlow: Flow<AudioChunkData>,
+        sessionId: String,
+        sessionActive: AtomicBoolean,
+    ) {
+        var pipelineInitialized = false
+
+        audioFlow.collect { audioChunk ->
+            if (!sessionActive.get() || !sessionCoordinator.isSessionActive(sessionId)) {
+                logger.debug("Session $sessionId no longer active, stopping audio processing")
+                return@collect
+            }
+
+            try {
+                if (audioChunk.sessionId != sessionId) {
+                    logger.warn("Session ID mismatch in audio chunk: expected $sessionId, got ${audioChunk.sessionId}")
+                    return@collect
+                }
+
+                if (audioChunk.audioData.isEmpty()) {
+                    logger.warn("Empty audio data received for session $sessionId")
+                    return@collect
+                }
+
+                logger.debug(
+                    "Processing audio chunk: session=${audioChunk.sessionId}, " +
+                        "size=${audioChunk.audioData.size}, " +
+                        "seq=${audioChunk.sequenceNumber}",
+                )
+
+                // Initialize services on first chunk
+                if (!pipelineInitialized) {
+                    val initResult = initializeStreamingServices(sessionId, audioChunk)
+                    if (initResult.isFailure) {
+                        logger.error("Failed to initialize streaming services for session $sessionId", initResult.exceptionOrNull())
+                        terminateSession(sessionId, SessionTerminationReason.UNRECOVERABLE_ERROR)
+                        return@collect
+                    }
+                }
+
+                // Forward audio chunk to streaming pipeline
+                val processResult = audioStreamingPipeline.processAudioChunk(sessionId, audioChunk.audioData)
+                if (processResult.isFailure) {
+                    logger.warn(
+                        "Failed to process audio chunk ${audioChunk.sequenceNumber} for session $sessionId",
+                        processResult.exceptionOrNull(),
+                    )
+                } else {
+                    logger.debug("Audio chunk processed successfully: ${audioChunk.sequenceNumber}")
+                }
+            } catch (e: Exception) {
+                logger.error("Error processing audio chunk ${audioChunk.sequenceNumber} for session $sessionId", e)
+            }
+        }
+
+        logger.debug("Audio processing completed for session $sessionId")
+    }
+
+    /**
+     * Process control messages - same as before but cleaner logging
      */
     private suspend fun processControlMessages(
         controlFlow: Flow<ControlMessage>,
@@ -331,14 +310,12 @@ class WebSocketHandler(
         sessionActive: AtomicBoolean,
     ) {
         controlFlow.collect { controlMessage ->
-            // Double-check session is still active
             if (!sessionActive.get() || !sessionCoordinator.isSessionActive(sessionId)) {
                 logger.debug("Session $sessionId no longer active, stopping control processing")
                 return@collect
             }
 
             try {
-                // Validate control message
                 if (controlMessage.sessionId != sessionId) {
                     logger.warn(
                         "Session ID mismatch in control message: expected $sessionId, " +
@@ -384,11 +361,24 @@ class WebSocketHandler(
     }
 
     /**
-     * Handle conversation state change messages
+     * Terminate session using coordinator V2 - context cleanup is automatic
      */
+    private suspend fun terminateSession(
+        sessionId: String,
+        reason: SessionTerminationReason,
+    ) {
+        logger.info("Terminating session $sessionId with reason: $reason")
+        try {
+            sessionCoordinator.terminateSession(sessionId, reason)
+            // Context cleanup is automatic! No manual state removal needed
+        } catch (e: Exception) {
+            logger.error("Failed to terminate session $sessionId", e)
+        }
+    }
+
+    // Control message handlers - same as before
     private suspend fun handleConversationStateMessage(message: ControlMessage) {
         logger.debug("Handling conversation state change for session ${message.sessionId}")
-
         try {
             sendConnectionStatus(
                 message.sessionId,
@@ -405,15 +395,11 @@ class WebSocketHandler(
         }
     }
 
-    /**
-     * Handle connection status messages
-     */
     private suspend fun handleConnectionStatusMessage(
         message: ControlMessage,
         sessionActive: AtomicBoolean,
     ) {
         logger.debug("Handling connection status for session ${message.sessionId}")
-
         try {
             if (message.data is ConnectionStatusMessage) {
                 when (message.data.status) {
@@ -450,12 +436,8 @@ class WebSocketHandler(
         }
     }
 
-    /**
-     * Handle error messages from client
-     */
     private suspend fun handleErrorMessage(message: ControlMessage) {
         logger.warn("Client reported error for session ${message.sessionId}: ${message.rawData}")
-
         try {
             sendConnectionStatus(
                 message.sessionId,
@@ -467,9 +449,6 @@ class WebSocketHandler(
         }
     }
 
-    /**
-     * Send heartbeat
-     */
     private suspend fun sendHeartbeat(
         sessionId: String,
         sessionActive: AtomicBoolean,
@@ -506,9 +485,9 @@ class WebSocketHandler(
         }
     }
 
-    // Session event handlers
+    // Session event handlers - SIMPLIFIED cleanup!
     override suspend fun onSessionCreated(event: SessionCreatedEvent): Result<Unit> {
-        logger.debug("Session created: ${event.sessionId}")
+        logger.debug("Session created with centralized context: ${event.sessionId}")
         return Result.success(Unit)
     }
 
@@ -516,7 +495,7 @@ class WebSocketHandler(
         return try {
             logger.info("Cleaning up WebSocket resources for session: ${event.sessionId}")
 
-            // Unregister from connection manager
+            // Unregister from connection manager - context cleanup is automatic
             connectionManager.unregisterSession(event.sessionId)
 
             logger.debug("WebSocket cleanup completed for session: ${event.sessionId}")
@@ -527,7 +506,7 @@ class WebSocketHandler(
         }
     }
 
-    // Public methods for sending messages via WebSocket
+    // Public methods for sending messages via WebSocket - same as before
     suspend fun sendPartialTranscript(
         sessionId: String,
         transcript: String,
@@ -621,7 +600,6 @@ class WebSocketHandler(
         }
     }
 
-    // Utility methods
     private suspend fun sendConnectionStatus(
         sessionId: String,
         status: ConnectionStatus,
@@ -660,13 +638,13 @@ class WebSocketHandler(
     }
 
     override suspend fun shutdown() {
-        logger.info("Shutting down WebSocket handler...")
+        logger.info("Shutting down WebSocket handler V2...")
 
         sessionMutex.withLock {
             activeSessions.clear()
         }
 
         coroutineScope.cancel()
-        logger.info("WebSocket handler shutdown complete")
+        logger.info("WebSocket handler V2 shutdown complete")
     }
 }

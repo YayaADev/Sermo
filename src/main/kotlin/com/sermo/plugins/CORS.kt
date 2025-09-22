@@ -20,7 +20,7 @@ fun Application.configureCORS() {
         allowHeader(HttpHeaders.AccessControlAllowHeaders)
         allowHeader(HttpHeaders.AccessControlAllowMethods)
 
-        // Allow all origins for development - you can restrict this for production
+        // Allow all origins for development TODO: I did this for obsidian, figure out robust way
         anyHost()
 
         allowCredentials = true

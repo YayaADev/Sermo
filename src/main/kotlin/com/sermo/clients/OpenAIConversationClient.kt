@@ -81,49 +81,6 @@ class OpenAIConversationClient(
             }
         }
 
-    override suspend fun correctGrammar(
-        text: String,
-        language: String,
-    ): Result<String> =
-        withContext(Dispatchers.IO) {
-            try {
-                logger.info("Grammar correction request - Language: $language, Text: '${text.take(50)}...'")
-
-                val messages =
-                    listOf(
-                        ChatCompletionMessageParam.ofSystem(
-                            ChatCompletionSystemMessageParam.builder()
-                                .content(buildGrammarCorrectionPrompt(language))
-                                .build(),
-                        ),
-                        ChatCompletionMessageParam.ofUser(
-                            ChatCompletionUserMessageParam.builder()
-                                .content(text)
-                                .build(),
-                        ),
-                    )
-
-                val request =
-                    ChatCompletionCreateParams.builder()
-                        .model(ChatModel.GPT_4O_MINI)
-                        .messages(messages)
-                        .temperature(0.2)
-                        .maxTokens(300)
-                        .build()
-
-                val completion: ChatCompletion = openAIClient.chat().completions().create(request)
-
-                val result =
-                    completion.choices().firstOrNull()?.message()?.content()?.getOrNull()?.trim()
-                        ?: error("Missing corrected text from OpenAI")
-
-                Result.success(result)
-            } catch (e: Exception) {
-                logger.error("Grammar correction failed", e)
-                Result.failure(e)
-            }
-        }
-
     companion object {
         private val logger = LoggerFactory.getLogger(OpenAIConversationClient::class.java)
 
@@ -141,22 +98,6 @@ class OpenAIConversationClient(
             - Ask follow-up questions to keep the conversation flowing
 
             Remember: You are helping someone learn $language through conversation practice.
-            """.trimIndent()
-
-        private fun buildGrammarCorrectionPrompt(language: String): String =
-            """
-            You are a $language grammar correction assistant.
-
-            Task: Correct any grammar, spelling, or usage errors in the provided text.
-
-            Rules:
-            - Return ONLY the corrected text
-            - Maintain the original meaning and tone
-            - Fix grammar, spelling, and word order errors
-            - Use natural, native-speaker $language
-            - If the text is already correct, return it unchanged
-
-            Do not add explanations, just return the corrected text.
             """.trimIndent()
 
         private fun userMessage(content: String) =

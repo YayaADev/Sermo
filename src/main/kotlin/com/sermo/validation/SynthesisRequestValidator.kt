@@ -20,13 +20,13 @@ object SynthesisRequestValidator {
         }
 
         request.speed?.let {
-            if (it < MIN_SPEED || it > MAX_SPEED) {
+            if (it !in MIN_SPEED..MAX_SPEED) {
                 throw ValidationException("INVALID_SPEED", "Speed must be between $MIN_SPEED and $MAX_SPEED")
             }
         }
 
         request.pitch?.let {
-            if (it < MIN_PITCH || it > MAX_PITCH) {
+            if (it !in MIN_PITCH..MAX_PITCH) {
                 throw ValidationException("INVALID_PITCH", "Pitch must be between $MIN_PITCH and $MAX_PITCH")
             }
         }

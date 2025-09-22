@@ -5,6 +5,9 @@ import com.sermo.models.Constants.DEFAULT_LANGUAGE_CODE
 import com.sermo.models.TranscriptionResponse
 import org.slf4j.LoggerFactory
 
+/**
+ * Used for the REST API
+ */
 class SpeechToTextService(
     private val speechToText: SpeechToText,
 ) {

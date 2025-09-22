@@ -6,6 +6,7 @@ import com.sermo.plugins.configureMonitoring
 import com.sermo.plugins.configureRouting
 import com.sermo.plugins.configureSerialization
 import com.sermo.plugins.configureWebSockets
+import com.sermo.session.SessionContextRegistry
 import com.sermo.session.SessionCoordinator
 import com.sermo.session.SessionEventBus
 import com.sermo.websocket.WebSocketEventRelay
@@ -46,11 +47,13 @@ fun Application.module() {
         try {
             val webSocketEventRelay by inject<WebSocketEventRelay>()
             val sessionCoordinator by inject<SessionCoordinator>()
+            val sessionContextRegistry by inject<SessionContextRegistry>()
             val eventBus by inject<SessionEventBus>()
 
             runBlocking {
                 webSocketEventRelay.shutdown()
                 sessionCoordinator.shutdown()
+                sessionContextRegistry.shutdown()
                 eventBus.shutdown()
             }
 

@@ -4,11 +4,14 @@ import com.sermo.models.StreamingTranscriptResult
 import com.sermo.models.TTSStreamConfig
 import com.sermo.session.ConversationFlowStartedEvent
 import com.sermo.session.ConversationFlowStoppedEvent
+import com.sermo.session.ConversationSession
 import com.sermo.session.ConversationStateChangedEvent
 import com.sermo.session.FinalTranscriptEvent
 import com.sermo.session.PartialTranscriptEvent
 import com.sermo.session.STTTranscriptReceivedEvent
 import com.sermo.session.SessionAwareService
+import com.sermo.session.SessionContext
+import com.sermo.session.SessionContextRegistry
 import com.sermo.session.SessionCreatedEvent
 import com.sermo.session.SessionEventBus
 import com.sermo.session.SessionTerminatedEvent
@@ -16,25 +19,21 @@ import com.sermo.websocket.ConversationState
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
 import sermo.protocol.SermoProtocol.ConversationTurn
-import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Conversation flow manager
+ * Refactored Conversation Flow Manager using centralized session context
  */
 class ConversationFlowManager(
     private val conversationService: ConversationService,
     private val streamingTextToSpeechService: StreamingTextToSpeechService,
+    private val contextRegistry: SessionContextRegistry,
     eventBus: SessionEventBus,
-) : SessionAwareService(eventBus, "ConversationFlowManager") {
+) : SessionAwareService(eventBus, "ConversationFlowManagerV2") {
     companion object {
         private val logger = LoggerFactory.getLogger(ConversationFlowManager::class.java)
         private const val MAX_CONVERSATION_HISTORY = 20
         private const val MIN_TRANSCRIPT_LENGTH_FOR_RESPONSE = 3
     }
-
-    // Per-session state
-    private val conversationHistories = ConcurrentHashMap<String, MutableList<ConversationTurn>>()
-    private val conversationSessions = ConcurrentHashMap<String, ConversationSession>()
 
     init {
         // Subscribe to STT transcript events
@@ -58,16 +57,19 @@ class ConversationFlowManager(
     }
 
     /**
-     * Start conversation flow for a session
+     * Start conversation flow - uses context
      */
     fun startConversationFlow(
         sessionId: String,
         languageCode: String,
     ): Result<Unit> {
         return try {
-            logger.info("Starting conversation flow for session: $sessionId with language: $languageCode")
+            logger.info("Starting conversation flow for session: $sessionId")
 
-            val session =
+            val context = contextRegistry.requireContext(sessionId)
+
+            // Create conversation session in context
+            context.conversationState.session =
                 ConversationSession(
                     sessionId = sessionId,
                     languageCode = languageCode,
@@ -75,10 +77,6 @@ class ConversationFlowManager(
                     startTime = System.currentTimeMillis(),
                 )
 
-            conversationSessions[sessionId] = session
-            conversationHistories[sessionId] = mutableListOf()
-
-            // Publish event
             publishEvent(
                 ConversationFlowStartedEvent(
                     sessionId = sessionId,
@@ -96,35 +94,34 @@ class ConversationFlowManager(
     }
 
     /**
-     * Process transcript result
+     * Process transcript result - uses context
      */
     suspend fun processTranscriptResult(
         sessionId: String,
         transcriptResult: StreamingTranscriptResult,
     ): Result<Unit> {
         return try {
-            val session = conversationSessions[sessionId]
+            val context = contextRegistry.getContext(sessionId)
+            val session = context?.conversationState?.session
+
             if (session == null || !session.isActive) {
                 logger.debug("No active conversation session for transcript: $sessionId")
                 return Result.success(Unit)
             }
 
             if (transcriptResult.isFinal) {
-                session.bufferedTranscript = transcriptResult.transcript.trim()
-                session.lastTranscriptTime = System.currentTimeMillis()
+                // Update conversation state in context
+                context.conversationState.bufferedTranscript = transcriptResult.transcript.trim()
+                context.conversationState.lastTranscriptTime = System.currentTimeMillis()
 
-                logger.debug("Buffered final transcript for session $sessionId: '${session.bufferedTranscript}'")
+                logger.debug("Buffered final transcript for session $sessionId: '${context.conversationState.bufferedTranscript}'")
 
-                // With Google's singleUtterance, final transcript means end of turn
-                if (session.bufferedTranscript?.isNotBlank() == true) {
-                    handleUtteranceComplete(session)
+                if (context.conversationState.bufferedTranscript?.isNotBlank() == true) {
+                    handleUtteranceComplete(context)
                 }
             } else {
-                // Update partial transcript buffer
-                session.partialTranscript = transcriptResult.transcript.trim()
-
-                // Send partial transcript via event bus
-                publishPartialTranscript(sessionId, session.partialTranscript!!, transcriptResult.confidence)
+                context.conversationState.partialTranscript = transcriptResult.transcript.trim()
+                publishPartialTranscript(sessionId, context.conversationState.partialTranscript!!, transcriptResult.confidence)
             }
 
             Result.success(Unit)
@@ -136,11 +133,13 @@ class ConversationFlowManager(
     }
 
     /**
-     * Handle utterance completion
+     * Handle utterance completion - uses context
      */
-    private suspend fun handleUtteranceComplete(session: ConversationSession) {
+    private suspend fun handleUtteranceComplete(context: SessionContext) {
         try {
-            val transcript = session.bufferedTranscript
+            val transcript = context.conversationState.bufferedTranscript
+            val session = context.conversationState.session!!
+
             if (transcript.isNullOrBlank() || transcript.length < MIN_TRANSCRIPT_LENGTH_FOR_RESPONSE) {
                 logger.debug("No sufficient transcript for response in session ${session.sessionId}")
                 return
@@ -148,11 +147,10 @@ class ConversationFlowManager(
 
             logger.info("Utterance completed for session ${session.sessionId}: '$transcript'")
 
-            // Send final transcript via event bus
             publishFinalTranscript(session.sessionId, transcript, 1.0f, session.languageCode)
 
-            // Get conversation history
-            val history = conversationHistories[session.sessionId] ?: mutableListOf()
+            // Get conversation history from context
+            val history = context.conversationState.conversationHistory
 
             // Add user turn to history
             val userTurn =
@@ -181,8 +179,6 @@ class ConversationFlowManager(
             val conversationResponse = responseResult.getOrThrow()
             val aiResponseText = conversationResponse.aiResponse
 
-            logger.info("Generated AI response for session ${session.sessionId}: '$aiResponseText'")
-
             // Add AI turn to history
             val aiTurn =
                 ConversationTurn.newBuilder()
@@ -195,37 +191,34 @@ class ConversationFlowManager(
 
             // Trim conversation history if too long
             if (history.size > MAX_CONVERSATION_HISTORY) {
-                val trimmed = history.takeLast(MAX_CONVERSATION_HISTORY).toMutableList()
-                conversationHistories[session.sessionId] = trimmed
+                val trimmed = history.takeLast(MAX_CONVERSATION_HISTORY)
+                history.clear()
+                history.addAll(trimmed)
             }
 
-            // Generate TTS audio for AI response
-            generateAndSendTTSResponse(session, aiResponseText)
+            // Generate TTS response
+            generateAndSendTTSResponse(context, aiResponseText)
 
             // Clear buffered transcript
-            session.bufferedTranscript = null
-            session.partialTranscript = null
+            context.conversationState.bufferedTranscript = null
+            context.conversationState.partialTranscript = null
         } catch (e: Exception) {
-            logger.error("Failed to handle utterance completion for session ${session.sessionId}", e)
-            publishConversationState(session.sessionId, ConversationState.ERROR)
-            publishError(session.sessionId, "UTTERANCE_PROCESSING_ERROR", e.message ?: "Unknown error")
+            logger.error("Failed to handle utterance completion for session ${context.sessionInfo.sessionId}", e)
+            publishConversationState(context.sessionInfo.sessionId, ConversationState.ERROR)
+            publishError(context.sessionInfo.sessionId, "UTTERANCE_PROCESSING_ERROR", e.message ?: "Unknown error")
         }
     }
 
-    /**
-     * Generate TTS response
-     */
     private fun generateAndSendTTSResponse(
-        session: ConversationSession,
+        context: SessionContext,
         responseText: String,
     ) {
         try {
+            val session = context.conversationState.session!!
             logger.debug("Starting TTS streaming for session ${session.sessionId}")
 
-            // Update conversation state via event bus
             publishConversationState(session.sessionId, ConversationState.SPEAKING)
 
-            // Start TTS streaming
             val streamingResult =
                 streamingTextToSpeechService.startTTSStreaming(
                     sessionId = session.sessionId,
@@ -249,39 +242,32 @@ class ConversationFlowManager(
 
             logger.info("TTS streaming initiated for session ${session.sessionId}")
         } catch (e: Exception) {
-            logger.error("Failed to generate TTS response for session ${session.sessionId}", e)
-            publishConversationState(session.sessionId, ConversationState.ERROR)
-            publishError(session.sessionId, "TTS_GENERATION_ERROR", e.message ?: "Unknown error")
+            logger.error("Failed to generate TTS response for session ${context.sessionInfo.sessionId}", e)
+            publishConversationState(context.sessionInfo.sessionId, ConversationState.ERROR)
+            publishError(context.sessionInfo.sessionId, "TTS_GENERATION_ERROR", e.message ?: "Unknown error")
         }
     }
 
     /**
-     * Get conversation history for a session
+     * Get conversation history - uses context
      */
     fun getConversationHistory(sessionId: String): List<ConversationTurn> {
-        return conversationHistories[sessionId]?.toList() ?: emptyList()
+        return contextRegistry.getContext(sessionId)?.conversationState?.conversationHistory?.toList() ?: emptyList()
     }
 
     /**
-     * Check if conversation is active for a session
+     * Check if conversation is active - uses context
      */
     fun isConversationActive(sessionId: String): Boolean {
-        return conversationSessions[sessionId]?.isActive == true
+        return contextRegistry.getContext(sessionId)?.conversationState?.session?.isActive == true
     }
 
-    // Event publishing methods (instead of direct WebSocket calls)
     private fun publishPartialTranscript(
         sessionId: String,
         transcript: String,
         confidence: Float,
     ) {
-        publishEvent(
-            PartialTranscriptEvent(
-                sessionId = sessionId,
-                transcript = transcript,
-                confidence = confidence,
-            ),
-        )
+        publishEvent(PartialTranscriptEvent(sessionId = sessionId, transcript = transcript, confidence = confidence))
     }
 
     private fun publishFinalTranscript(
@@ -291,12 +277,7 @@ class ConversationFlowManager(
         languageCode: String,
     ) {
         publishEvent(
-            FinalTranscriptEvent(
-                sessionId = sessionId,
-                transcript = transcript,
-                confidence = confidence,
-                languageCode = languageCode,
-            ),
+            FinalTranscriptEvent(sessionId = sessionId, transcript = transcript, confidence = confidence, languageCode = languageCode),
         )
     }
 
@@ -304,15 +285,9 @@ class ConversationFlowManager(
         sessionId: String,
         state: ConversationState,
     ) {
-        publishEvent(
-            ConversationStateChangedEvent(
-                sessionId = sessionId,
-                state = state,
-            ),
-        )
+        publishEvent(ConversationStateChangedEvent(sessionId = sessionId, state = state))
     }
 
-    // Session event handlers
     override suspend fun onSessionCreated(event: SessionCreatedEvent): Result<Unit> {
         logger.debug("Conversation flow ready for session: ${event.sessionId}")
         return Result.success(Unit)
@@ -322,15 +297,10 @@ class ConversationFlowManager(
         return try {
             logger.info("Cleaning up conversation flow for session: ${event.sessionId}")
 
-            // Stop any active conversation flow
-            conversationSessions[event.sessionId]?.let { session ->
-                session.isActive = false
-                publishEvent(ConversationFlowStoppedEvent(sessionId = event.sessionId))
-            }
+            // We only mark conversation as inactive in case there are any race conditions
+            contextRegistry.getContext(event.sessionId)?.conversationState?.session?.isActive = false
 
-            // Clean up session-specific resources
-            conversationSessions.remove(event.sessionId)
-            conversationHistories.remove(event.sessionId)
+            publishEvent(ConversationFlowStoppedEvent(sessionId = event.sessionId))
 
             logger.debug("Conversation flow cleanup completed for session: ${event.sessionId}")
             Result.success(Unit)
@@ -340,16 +310,3 @@ class ConversationFlowManager(
         }
     }
 }
-
-/**
- * Represents an active conversation session
- */
-private data class ConversationSession(
-    val sessionId: String,
-    val languageCode: String,
-    var isActive: Boolean,
-    val startTime: Long,
-    var bufferedTranscript: String? = null,
-    var partialTranscript: String? = null,
-    var lastTranscriptTime: Long? = null,
-)

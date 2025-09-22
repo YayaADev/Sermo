@@ -6,34 +6,30 @@ import com.sermo.models.AudioStreamConfig
 import com.sermo.models.Constants.DEFAULT_LANGUAGE_CODE
 import com.sermo.models.STTStreamConfig
 import com.sermo.session.AudioStreamingStartedEvent
-import com.sermo.session.AudioStreamingStoppedEvent
 import com.sermo.session.STTTranscriptReceivedEvent
 import com.sermo.session.SessionAwareService
+import com.sermo.session.SessionContextRegistry
 import com.sermo.session.SessionCreatedEvent
 import com.sermo.session.SessionEventBus
 import com.sermo.session.SessionTerminatedEvent
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
-import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Audio streaming pipeline with session event management
+ * Refactored Audio Pipeline using centralized session context
+ * No more manual state management!
  */
 class AudioStreamingPipeline(
     val streamingSpeechToText: StreamingSpeechToText,
+    private val contextRegistry: SessionContextRegistry,
     eventBus: SessionEventBus,
-) : SessionAwareService(eventBus, "AudioStreamingPipeline") {
+) : SessionAwareService(eventBus, "AudioStreamingPipelineV2") {
     companion object {
         private val logger = LoggerFactory.getLogger(AudioStreamingPipeline::class.java)
     }
 
-    // Per-session state
-    private val sessionConfigs = ConcurrentHashMap<String, AudioStreamConfig>()
-    private val sessionStreams = ConcurrentHashMap<String, Boolean>()
-    private val sessionSTTStreams = ConcurrentHashMap<String, Boolean>()
-
     /**
-     * Start streaming for a session
+     * Start streaming for a session - uses context instead of internal maps
      */
     suspend fun startStreaming(
         sessionId: String,
@@ -42,26 +38,27 @@ class AudioStreamingPipeline(
         return try {
             logger.info("Starting audio streaming for session: $sessionId")
 
-            sessionConfigs[sessionId] = config
-            sessionStreams[sessionId] = true
+            // Get session context (throws if not found)
+            val context = contextRegistry.requireContext(sessionId)
 
-            // Start STT streaming for this session
+            // Update context state (no more manual map management!)
+            context.audioState.config = config
+            context.audioState.isStreamingActive.set(true)
+
+            // Start STT streaming
             val sttConfig =
                 STTStreamConfig(
                     languageCode = DEFAULT_LANGUAGE_CODE,
                     sampleRateHertz = config.sampleRateHertz,
                     encoding = AudioEncoding.LINEAR16,
                     enableInterimResults = true,
-                    singleUtterance = true, // Enable Google's built-in turn detection
+                    singleUtterance = true,
                 )
 
             val sttResult = streamingSpeechToText.startStreaming(sttConfig)
             if (sttResult.isSuccess) {
-                sessionSTTStreams[sessionId] = true
-
-                // Subscribe to STT transcript flow for this session
+                context.audioState.isSTTStreamActive.set(true)
                 subscribeToSTTTranscripts(sessionId)
-
                 logger.info("STT streaming started for session: $sessionId")
             } else {
                 logger.error("Failed to start STT streaming for session $sessionId", sttResult.exceptionOrNull())
@@ -87,18 +84,18 @@ class AudioStreamingPipeline(
     }
 
     /**
-     * Process audio chunk for a session
+     * Process audio chunk - uses context
      */
     suspend fun processAudioChunk(
         sessionId: String,
         audioData: ByteArray,
     ): Result<Unit> {
-        if (!sessionStreams.containsKey(sessionId)) {
+        val context = contextRegistry.getContext(sessionId)
+        if (context?.audioState?.isStreamingActive?.get() != true) {
             return Result.failure(Exception("No active audio stream for session: $sessionId"))
         }
 
         return try {
-            // Forward audio chunk to STT
             val sttResult = streamingSpeechToText.sendAudioChunk(audioData)
             if (sttResult.isFailure) {
                 logger.warn("Failed to send audio chunk to STT for session $sessionId", sttResult.exceptionOrNull())
@@ -114,14 +111,16 @@ class AudioStreamingPipeline(
     }
 
     /**
-     * Subscribe to STT transcripts for a session
+     * Check if streaming is active - uses context
      */
+    fun isStreamingActive(sessionId: String): Boolean {
+        return contextRegistry.getContext(sessionId)?.audioState?.isStreamingActive?.get() == true
+    }
+
     private fun subscribeToSTTTranscripts(sessionId: String) {
-        // Launch coroutine to listen for STT transcripts and forward them to conversation flow
         eventBus.eventBusScope.launch {
             streamingSpeechToText.getTranscriptFlow().collect { transcriptResult ->
                 try {
-                    // Forward transcript to conversation flow via event
                     publishEvent(
                         STTTranscriptReceivedEvent(
                             sessionId = sessionId,
@@ -138,41 +137,7 @@ class AudioStreamingPipeline(
         }
     }
 
-    /**
-     * Stop streaming for a session
-     */
-    suspend fun stopStreaming(sessionId: String): Result<Unit> {
-        return try {
-            logger.info("Stopping audio streaming for session: $sessionId")
-
-            // Stop STT streaming
-            if (sessionSTTStreams[sessionId] == true) {
-                streamingSpeechToText.stopStreaming()
-                sessionSTTStreams.remove(sessionId)
-            }
-
-            sessionConfigs.remove(sessionId)
-            sessionStreams.remove(sessionId)
-
-            // Publish event
-            publishEvent(AudioStreamingStoppedEvent(sessionId = sessionId))
-
-            logger.info("Audio streaming stopped for session: $sessionId")
-            Result.success(Unit)
-        } catch (e: Exception) {
-            logger.error("Failed to stop audio streaming for session $sessionId", e)
-            Result.failure(e)
-        }
-    }
-
-    /**
-     * Check if streaming is active for a session
-     */
-    fun isStreamingActive(sessionId: String): Boolean {
-        return sessionStreams[sessionId] == true
-    }
-
-    // Session event handlers
+    // Session event handlers - NO MORE MANUAL CLEANUP!
     override suspend fun onSessionCreated(event: SessionCreatedEvent): Result<Unit> {
         logger.debug("Audio pipeline ready for session: ${event.sessionId}")
         return Result.success(Unit)
@@ -182,15 +147,11 @@ class AudioStreamingPipeline(
         return try {
             logger.info("Cleaning up audio streaming for session: ${event.sessionId}")
 
-            // Stop any active streaming
-            if (isStreamingActive(event.sessionId)) {
-                stopStreaming(event.sessionId)
+            // The context is automatically cleaned up by the registry!
+            // We only need to stop external resources like STT streams
+            if (streamingSpeechToText.isStreamActive()) {
+                streamingSpeechToText.stopStreaming()
             }
-
-            // Clean up session-specific resources
-            sessionConfigs.remove(event.sessionId)
-            sessionStreams.remove(event.sessionId)
-            sessionSTTStreams.remove(event.sessionId)
 
             logger.debug("Audio streaming cleanup completed for session: ${event.sessionId}")
             Result.success(Unit)

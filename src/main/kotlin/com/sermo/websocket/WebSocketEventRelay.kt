@@ -14,7 +14,6 @@ import org.slf4j.LoggerFactory
 
 /**
  * Handles transcript and conversation state events to send via WebSocket
- * UPDATED: Also handles TTS audio chunk events
  */
 class WebSocketEventRelay(
     private val webSocketHandler: WebSocketHandler,

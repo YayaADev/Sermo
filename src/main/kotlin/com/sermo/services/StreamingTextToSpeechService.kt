@@ -8,44 +8,36 @@ import com.sermo.models.TTSStreamingEvent
 import com.sermo.models.TTSStreamingMetrics
 import com.sermo.models.TTSStreamingState
 import com.sermo.session.SessionAwareService
+import com.sermo.session.SessionContext
+import com.sermo.session.SessionContextRegistry
 import com.sermo.session.SessionCreatedEvent
 import com.sermo.session.SessionEventBus
 import com.sermo.session.SessionTerminatedEvent
 import com.sermo.session.TTSAudioChunkEvent
+import com.sermo.session.TTSSessionInfo
 import com.sermo.session.TTSStreamingStartedEvent
 import com.sermo.session.TTSStreamingStoppedEvent
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
 import java.util.Base64
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
- *  TTS service implementation with session event management
+ * Refactored TTS service using centralized session context for websocket
  */
 class StreamingTextToSpeechService(
     private val textToSpeechClient: TextToSpeechClient,
-    private val languageDetectionService: LanguageDetectionService,
+    private val contextRegistry: SessionContextRegistry,
     eventBus: SessionEventBus,
-) : SessionAwareService(eventBus, "StreamingTextToSpeechService") {
+) : SessionAwareService(eventBus, "StreamingTextToSpeechServiceV2") {
     companion object {
         private val logger = LoggerFactory.getLogger(StreamingTextToSpeechService::class.java)
         private const val CHUNK_SIZE_BYTES = 8192 // 8KB chunks
     }
 
-    private val sequenceNumberGenerator = AtomicLong(0L)
-
-    // Per-session state
-    private val activeTTSSessions = ConcurrentHashMap<String, TTSSessionInfo>()
-    private val sessionChunkFlows = ConcurrentHashMap<String, MutableSharedFlow<TTSAudioChunk>>()
-    private val sessionMetrics = ConcurrentHashMap<String, TTSStreamingMetrics>()
-
-    // Global TTS event flow
+    // Global TTS event flow (not per-session)
     private val ttsEventFlow =
         MutableSharedFlow<TTSStreamingEvent>(
             replay = 0,
@@ -62,12 +54,14 @@ class StreamingTextToSpeechService(
         return try {
             logger.info("Starting TTS streaming for session: $sessionId")
 
-            // Validate input
             if (text.isBlank()) {
                 return Result.failure(Exception("Empty text provided for TTS"))
             }
 
-            // Create TTS session info
+            val context = contextRegistry.requireContext(sessionId)
+            val ttsState = context.ttsState
+
+            // Create TTS session info in context
             val ttsInfo =
                 TTSSessionInfo(
                     sessionId = sessionId,
@@ -77,17 +71,17 @@ class StreamingTextToSpeechService(
                     startTime = System.currentTimeMillis(),
                 )
 
-            activeTTSSessions[sessionId] = ttsInfo
+            ttsState.activeTTSSessions[sessionId] = ttsInfo
 
-            // Create chunk flow for this session
+            // Create chunk flow in context
             val chunkFlow =
                 MutableSharedFlow<TTSAudioChunk>(
                     replay = 0,
                     extraBufferCapacity = 50,
                 )
-            sessionChunkFlows[sessionId] = chunkFlow
+            ttsState.sessionChunkFlows[sessionId] = chunkFlow
 
-            // Initialize metrics
+            // Initialize metrics in context
             val metrics =
                 TTSStreamingMetrics(
                     sessionId = sessionId,
@@ -101,29 +95,16 @@ class StreamingTextToSpeechService(
                     streamingLatency = 0.milliseconds,
                     errorCount = 0L,
                 )
-            sessionMetrics[sessionId] = metrics
+            ttsState.sessionMetrics[sessionId] = metrics
 
-            // Publish event
-            publishEvent(
-                TTSStreamingStartedEvent(
-                    sessionId = sessionId,
-                    text = text,
-                    languageCode = languageCode,
-                ),
-            )
+            publishEvent(TTSStreamingStartedEvent(sessionId = sessionId, text = text, languageCode = languageCode))
 
-            // Emit TTS event
-            ttsEventFlow.tryEmit(
-                TTSStreamingEvent(
-                    sessionId = sessionId,
-                    state = TTSStreamingState.INITIALIZING,
-                ),
-            )
+            ttsEventFlow.tryEmit(TTSStreamingEvent(sessionId = sessionId, state = TTSStreamingState.INITIALIZING))
 
             // Start TTS processing asynchronously
             serviceScope.launch {
                 try {
-                    performTTSStreaming(sessionId, text, languageCode, voice, streamConfig)
+                    performTTSStreaming(sessionId, text, languageCode, voice)
                 } catch (e: Exception) {
                     logger.error("TTS streaming failed for session $sessionId", e)
                     handleTTSError(sessionId, e)
@@ -140,30 +121,24 @@ class StreamingTextToSpeechService(
     }
 
     /**
-     * Perform actual TTS generation and streaming
+     * Perform actual TTS generation and streaming using context
      */
     private suspend fun performTTSStreaming(
         sessionId: String,
         text: String,
         languageCode: String,
         voice: String?,
-        streamConfig: TTSStreamConfig,
     ) {
         val startTime = System.currentTimeMillis()
 
         try {
-            // Update state to generating
-            updateMetricsState(sessionId, TTSStreamingState.GENERATING)
-            ttsEventFlow.tryEmit(
-                TTSStreamingEvent(
-                    sessionId = sessionId,
-                    state = TTSStreamingState.GENERATING,
-                ),
-            )
+            val context = contextRegistry.requireContext(sessionId)
+
+            updateMetricsState(context, TTSStreamingState.GENERATING)
+            ttsEventFlow.tryEmit(TTSStreamingEvent(sessionId = sessionId, state = TTSStreamingState.GENERATING))
 
             logger.debug("Generating TTS audio for session $sessionId")
 
-            // Generate TTS audio
             val ttsResult =
                 textToSpeechClient.synthesize(
                     text = text,
@@ -180,11 +155,8 @@ class StreamingTextToSpeechService(
 
             logger.info("TTS generation completed for session $sessionId in ${generationTime}ms")
 
-            // Decode base64 audio data
             val audioData = Base64.getDecoder().decode(synthesisResponse.audio)
-
-            // Start streaming the audio chunks
-            streamAudioChunks(sessionId, audioData, synthesisResponse)
+            streamAudioChunks(context, audioData, synthesisResponse)
         } catch (e: Exception) {
             logger.error("TTS processing failed for session $sessionId", e)
             handleTTSError(sessionId, e)
@@ -192,43 +164,32 @@ class StreamingTextToSpeechService(
     }
 
     /**
-     * Stream audio data as chunks
+     * Stream audio data as chunks using context
      */
     private suspend fun streamAudioChunks(
-        sessionId: String,
+        context: SessionContext,
         audioData: ByteArray,
         synthesisResponse: SynthesisResponse,
     ) {
         try {
-            val chunkFlow = sessionChunkFlows[sessionId]
+            val sessionId = context.sessionInfo.sessionId
+            val ttsState = context.ttsState
+            val chunkFlow = ttsState.sessionChunkFlows[sessionId]
+
             if (chunkFlow == null) {
                 logger.warn("No chunk flow found for session $sessionId")
                 return
             }
 
-            val session = activeTTSSessions[sessionId]
-            if (session == null) {
-                logger.warn("Session $sessionId not found during streaming")
-                return
-            }
-
             logger.debug("Starting audio chunk streaming for session $sessionId, total bytes: ${audioData.size}")
 
-            // Update state to streaming
-            updateMetricsState(sessionId, TTSStreamingState.STREAMING)
-            ttsEventFlow.tryEmit(
-                TTSStreamingEvent(
-                    sessionId = sessionId,
-                    state = TTSStreamingState.STREAMING,
-                    bytesStreamed = 0L,
-                ),
-            )
+            updateMetricsState(context, TTSStreamingState.STREAMING)
+            ttsEventFlow.tryEmit(TTSStreamingEvent(sessionId = sessionId, state = TTSStreamingState.STREAMING, bytesStreamed = 0L))
 
             val totalChunks = (audioData.size + CHUNK_SIZE_BYTES - 1) / CHUNK_SIZE_BYTES
             var bytesSent = 0L
             var chunksSent = 0L
 
-            // Stream audio in chunks
             for (i in 0 until totalChunks) {
                 val startIndex = i * CHUNK_SIZE_BYTES
                 val endIndex = kotlin.math.min(startIndex + CHUNK_SIZE_BYTES, audioData.size)
@@ -237,23 +198,20 @@ class StreamingTextToSpeechService(
                 val audioChunk =
                     TTSAudioChunk(
                         audioData = chunkData,
-                        sequenceNumber = sequenceNumberGenerator.incrementAndGet(),
+                        sequenceNumber = ttsState.sequenceNumberGenerator.incrementAndGet(),
                         isLast = (i == totalChunks - 1),
                         chunkDurationMs = calculateChunkDuration(chunkData.size, synthesisResponse),
                     )
 
-                // Emit chunk
                 val emitted = chunkFlow.tryEmit(audioChunk)
                 if (!emitted) {
                     logger.warn("Failed to emit audio chunk ${audioChunk.sequenceNumber} for session $sessionId")
                 }
 
-                // Update metrics
                 bytesSent += chunkData.size
                 chunksSent++
-                updateSessionMetrics(sessionId, chunksSent, bytesSent, TTSStreamingState.STREAMING)
+                updateSessionMetrics(context, chunksSent, bytesSent, TTSStreamingState.STREAMING)
 
-                // Also send via WebSocket by publishing event
                 publishEvent(
                     TTSAudioChunkEvent(
                         sessionId = sessionId,
@@ -265,12 +223,10 @@ class StreamingTextToSpeechService(
 
                 logger.debug("Sent audio chunk ${audioChunk.sequenceNumber} for session $sessionId: ${chunkData.size} bytes")
 
-                // Small delay between chunks
                 kotlinx.coroutines.delay(10)
             }
 
-            // Mark as completed
-            updateMetricsState(sessionId, TTSStreamingState.COMPLETED)
+            updateMetricsState(context, TTSStreamingState.COMPLETED)
             ttsEventFlow.tryEmit(
                 TTSStreamingEvent(
                     sessionId = sessionId,
@@ -286,14 +242,11 @@ class StreamingTextToSpeechService(
             // Auto-cleanup after completion
             stopTTSStreaming(sessionId)
         } catch (e: Exception) {
-            logger.error("Failed to stream audio chunks for session $sessionId", e)
-            handleTTSError(sessionId, e)
+            logger.error("Failed to stream audio chunks for session ${context.sessionInfo.sessionId}", e)
+            handleTTSError(context.sessionInfo.sessionId, e)
         }
     }
 
-    /**
-     * Calculate chunk duration
-     */
     private fun calculateChunkDuration(
         chunkSizeBytes: Int,
         synthesisResponse: SynthesisResponse,
@@ -305,16 +258,15 @@ class StreamingTextToSpeechService(
         }
     }
 
-    /**
-     * Update session metrics
-     */
     private fun updateSessionMetrics(
-        sessionId: String,
+        context: SessionContext,
         chunksGenerated: Long,
         bytesGenerated: Long,
         state: TTSStreamingState,
     ) {
-        val session = activeTTSSessions[sessionId] ?: return
+        val sessionId = context.sessionInfo.sessionId
+        val ttsState = context.ttsState
+        val session = ttsState.activeTTSSessions[sessionId] ?: return
         val currentTime = System.currentTimeMillis()
         val streamingDuration = (currentTime - session.startTime).milliseconds
 
@@ -337,30 +289,29 @@ class StreamingTextToSpeechService(
                 errorCount = 0L,
             )
 
-        sessionMetrics[sessionId] = updatedMetrics
+        ttsState.sessionMetrics[sessionId] = updatedMetrics
     }
 
-    /**
-     * Update metrics state only
-     */
     private fun updateMetricsState(
-        sessionId: String,
+        context: SessionContext,
         state: TTSStreamingState,
     ) {
-        sessionMetrics[sessionId]?.let { currentMetrics ->
-            sessionMetrics[sessionId] = currentMetrics.copy(state = state)
+        val sessionId = context.sessionInfo.sessionId
+        val ttsState = context.ttsState
+        ttsState.sessionMetrics[sessionId]?.let { currentMetrics ->
+            ttsState.sessionMetrics[sessionId] = currentMetrics.copy(state = state)
         }
     }
 
-    /**
-     * Handle TTS errors
-     */
-    private suspend fun handleTTSError(
+    private fun handleTTSError(
         sessionId: String,
         error: Exception,
     ) {
         try {
-            updateMetricsState(sessionId, TTSStreamingState.ERROR)
+            val context = contextRegistry.getContext(sessionId)
+            if (context != null) {
+                updateMetricsState(context, TTSStreamingState.ERROR)
+            }
 
             ttsEventFlow.tryEmit(
                 TTSStreamingEvent(
@@ -371,8 +322,6 @@ class StreamingTextToSpeechService(
             )
 
             publishError(sessionId, "TTS_STREAMING_ERROR", error.message ?: "Unknown error")
-
-            // Clean up session
             stopTTSStreaming(sessionId)
         } catch (e: Exception) {
             logger.error("Failed to handle TTS error for session $sessionId", e)
@@ -383,19 +332,17 @@ class StreamingTextToSpeechService(
         return try {
             logger.info("Stopping TTS streaming for session: $sessionId")
 
-            activeTTSSessions.remove(sessionId)
-            sessionChunkFlows.remove(sessionId)
-            sessionMetrics.remove(sessionId)
+            val context = contextRegistry.getContext(sessionId)
+            if (context != null) {
+                // Clear session-specific TTS state in context
+                val ttsState = context.ttsState
+                ttsState.activeTTSSessions.remove(sessionId)
+                ttsState.sessionChunkFlows.remove(sessionId)
+                ttsState.sessionMetrics.remove(sessionId)
+            }
 
-            // Publish event
             publishEvent(TTSStreamingStoppedEvent(sessionId = sessionId))
-
-            ttsEventFlow.tryEmit(
-                TTSStreamingEvent(
-                    sessionId = sessionId,
-                    state = TTSStreamingState.CANCELLED,
-                ),
-            )
+            ttsEventFlow.tryEmit(TTSStreamingEvent(sessionId = sessionId, state = TTSStreamingState.CANCELLED))
 
             logger.info("TTS streaming stopped for session: $sessionId")
             Result.success(Unit)
@@ -405,37 +352,26 @@ class StreamingTextToSpeechService(
         }
     }
 
-    fun getTTSChunkFlow(sessionId: String): Flow<TTSAudioChunk>? {
-        return sessionChunkFlows[sessionId]?.asSharedFlow()
-    }
-
-    fun getTTSEventFlow(): Flow<TTSStreamingEvent> {
-        return ttsEventFlow.asSharedFlow()
-    }
-
-    fun getStreamingMetrics(sessionId: String): TTSStreamingMetrics? {
-        return sessionMetrics[sessionId]
-    }
-
     fun isStreamingActive(sessionId: String): Boolean {
-        return activeTTSSessions.containsKey(sessionId)
+        return contextRegistry.getContext(sessionId)?.ttsState?.activeTTSSessions?.containsKey(sessionId) == true
     }
 
     override suspend fun shutdown() {
         logger.info("Shutting down TTS service...")
 
-        // Stop all active sessions
-        activeTTSSessions.keys.toList().forEach { sessionId ->
-            stopTTSStreaming(sessionId)
+        // Stop all active sessions - context registry will handle cleanup
+        contextRegistry.getActiveSessions().forEach { context ->
+            if (isStreamingActive(context.sessionInfo.sessionId)) {
+                stopTTSStreaming(context.sessionInfo.sessionId)
+            }
         }
 
         serviceScope.cancel()
         super.shutdown()
-
         logger.info("TTS service shutdown complete")
     }
 
-    // Session event handlers
+    // Session event handlers - MINIMAL CLEANUP!
     override suspend fun onSessionCreated(event: SessionCreatedEvent): Result<Unit> {
         logger.debug("TTS service ready for session: ${event.sessionId}")
         return Result.success(Unit)
@@ -445,7 +381,8 @@ class StreamingTextToSpeechService(
         return try {
             logger.info("Cleaning up TTS streaming for session: ${event.sessionId}")
 
-            // Stop any active TTS streaming
+            // Context registry automatically cleans up the TTSStreamingState!
+            // We only need to stop any active external processes
             if (isStreamingActive(event.sessionId)) {
                 stopTTSStreaming(event.sessionId)
             }
@@ -458,11 +395,3 @@ class StreamingTextToSpeechService(
         }
     }
 }
-
-data class TTSSessionInfo(
-    val sessionId: String,
-    val text: String,
-    val languageCode: String,
-    val voice: String?,
-    val startTime: Long,
-)

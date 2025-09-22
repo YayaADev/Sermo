@@ -43,6 +43,7 @@ detekt {
 
 dependencies {
     // SermoModels - API models (conditional: local project vs Docker jar)
+    // TODO: Need a better method
     if (file("libs/models.jar").exists()) {
         implementation(files("libs/models.jar"))
     } else {

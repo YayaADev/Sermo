@@ -47,5 +47,4 @@ enum class STTStreamState {
     CONNECTED,
     RECEIVING,
     ERROR,
-    RECONNECTING,
 }

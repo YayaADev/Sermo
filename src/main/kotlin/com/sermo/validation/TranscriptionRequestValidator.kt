@@ -17,7 +17,7 @@ object TranscriptionRequestValidator {
         val audioBytes =
             try {
                 Base64.getDecoder().decode(request.audio)
-            } catch (e: IllegalArgumentException) {
+            } catch (_: IllegalArgumentException) {
                 throw ValidationException("INVALID_BASE64", "Invalid base64 audio data")
             }
 

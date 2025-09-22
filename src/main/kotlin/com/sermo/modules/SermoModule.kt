@@ -9,7 +9,6 @@ import com.sermo.clients.TextToSpeechClient
 import com.sermo.services.AudioStreamingPipeline
 import com.sermo.services.ConversationFlowManager
 import com.sermo.services.ConversationService
-import com.sermo.services.LanguageDetectionService
 import com.sermo.services.SpeechToTextService
 import com.sermo.services.StreamingTextToSpeechService
 import com.sermo.services.TextToSpeechService
@@ -48,11 +47,12 @@ val sermoModule =
 
         // Services layer - business logic (simplified)
         single<SpeechToTextService> { SpeechToTextService(get()) }
-        single<TextToSpeechService> { TextToSpeechService(get(), get()) }
-        single<LanguageDetectionService> { LanguageDetectionService(get()) }
-        single<AudioStreamingPipeline> { AudioStreamingPipeline(get(), get()) }
+        single<TextToSpeechService> { TextToSpeechService(get()) }
+
+        // Websocket layer
+        single<AudioStreamingPipeline> { AudioStreamingPipeline(get(), get(), get()) }
         single<ConversationService> { ConversationService(get()) }
-        single { ConversationFlowManager(get(), get(), get()) } // conversationService, ttsService, eventBus
+        single { ConversationFlowManager(get(), get(), get(), get()) } // conversationService, ttsService, eventBus
         single<StreamingTextToSpeechService> {
             StreamingTextToSpeechService(get(), get(), get()) // ttsClient, languageDetection, eventBus
         }

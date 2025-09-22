@@ -12,24 +12,14 @@ data class AudioStreamConfig(
     val chunkSizeBytes: Int = 4096,
     val bufferSizeMs: Int = 100,
     val maxBufferSizeBytes: Int = 65536,
-) {
-    companion object {
-        const val DEFAULT_SAMPLE_RATE_HZ = 16000
-        const val DEFAULT_CHUNK_SIZE_BYTES = 4096
-        const val DEFAULT_BUFFER_SIZE_MS = 100
-        const val MAX_BUFFER_SIZE_BYTES = 65536
-    }
-}
+)
 
 /**
  * State of the audio streaming pipeline
  */
 enum class AudioStreamState {
     IDLE,
-    STREAMING,
-    BUFFERING,
     ERROR,
-    STOPPING,
 }
 
 /**
